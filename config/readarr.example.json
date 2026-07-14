@@ -1,0 +1,40 @@
+{
+  "instances": [
+    {
+      "id": "fiction-audio",
+      "name": "Fiction Audiobooks",
+      "url": "https://readarr-fiction-audiobooks.julianverse.net",
+      "apiKey": "YOUR_API_KEY_HERE",
+      "type": "audio",
+      "category": "fiction",
+      "enabled": true
+    },
+    {
+      "id": "fiction-ebook",
+      "name": "Fiction Books",
+      "url": "https://readarr-fiction-books.julianverse.net",
+      "apiKey": "YOUR_API_KEY_HERE",
+      "type": "ebook",
+      "category": "fiction",
+      "enabled": true
+    },
+    {
+      "id": "nonfiction-audio",
+      "name": "Nonfiction Audiobooks",
+      "url": "https://readarr-nf-audiobooks.julianverse.net",
+      "apiKey": "YOUR_API_KEY_HERE",
+      "type": "audio",
+      "category": "nonfiction",
+      "enabled": true
+    },
+    {
+      "id": "nonfiction-ebook",
+      "name": "Nonfiction Books",
+      "url": "https://readarr-nf-books.julianverse.net",
+      "apiKey": "YOUR_API_KEY_HERE",
+      "type": "ebook",
+      "category": "nonfiction",
+      "enabled": true
+    }
+  ]
+}

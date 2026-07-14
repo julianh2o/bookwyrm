@@ -7,3 +7,43 @@ generator client {
 datasource db {
   provider = "sqlite"
 }
+
+/// A book in the user's reading list
+model Book {
+  id          String   @id @default(cuid())
+  title       String
+  author      String
+  isbn        String?
+  category    String   // 'fiction' or 'nonfiction'
+  coverUrl    String?
+  notes       String?
+  metadataId  String?  // Provider-specific ID (e.g., rreading-glasses workId)
+  metadataProvider String? // Provider name (e.g., 'rreading-glasses')
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  requests    BookRequest[]
+
+  @@index([category])
+  @@index([metadataId])
+}
+
+/// A request to a specific Readarr instance for a book
+model BookRequest {
+  id          String   @id @default(cuid())
+  bookId      String
+  instanceId  String   // References config ID (e.g., 'fiction-audio')
+  status      String   @default("pending") // pending, searching, found, downloading, available, not_found, error
+  externalId  String?  // Readarr's internal ID for the book (numeric, for API calls)
+  externalSlug String? // Readarr's title slug for the book (for web UI URLs)
+  errorMessage String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  lastChecked DateTime?
+
+  book        Book     @relation(fields: [bookId], references: [id], onDelete: Cascade)
+
+  @@unique([bookId, instanceId])
+  @@index([status])
+  @@index([instanceId])
+}

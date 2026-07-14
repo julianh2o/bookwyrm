@@ -1,3 +1,3 @@
-export const APP_TITLE = 'Template App';
-export const APP_DESCRIPTION = 'A minimal application template';
-export const PAGE_TITLE_HOME = 'Home';
+export const APP_TITLE = 'BookWyrm';
+export const APP_DESCRIPTION = 'Book list webapp with Readarr integration';
+export const PAGE_TITLE_HOME = 'Books';

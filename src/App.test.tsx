@@ -10,6 +10,7 @@ describe('App', () => {
 			</HelmetProvider>,
 		);
 
-		expect(screen.getByText(/Welcome to Template App/i)).toBeInTheDocument();
+		// App renders the title
+		expect(screen.getByText(/BookWyrm/i)).toBeInTheDocument();
 	});
 });

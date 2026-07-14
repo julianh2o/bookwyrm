@@ -14,6 +14,14 @@
 # data
 /data
 
+# config with secrets (ignore all except examples)
+/config/*.json
+!/config/*.example.json
+
+# database files
+*.db
+*.db-journal
+
 # misc
 .DS_Store
 .env.local
