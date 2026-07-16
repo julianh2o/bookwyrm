@@ -20,7 +20,7 @@ interface RRGContributor {
 	Role: string;
 }
 
-interface RRGBook {
+export interface RRGBook {
 	ForeignId: number;
 	Asin?: string;
 	Description?: string;
@@ -29,6 +29,7 @@ interface RRGBook {
 	ShortTitle?: string;
 	Language?: string;
 	Format?: string;
+	EditionInformation?: string;
 	Publisher?: string;
 	ImageUrl?: string;
 	IsEbook?: boolean;
@@ -56,7 +57,7 @@ interface RRGSeriesLink {
 	IsPrimary?: boolean;
 }
 
-interface RRGWork {
+export interface RRGWork {
 	ForeignId: number;
 	Title: string;
 	FullTitle?: string;
@@ -66,6 +67,7 @@ interface RRGWork {
 	Genres?: string[];
 	Books?: RRGBook[];
 	Series?: RRGSeriesLink[];
+	Authors?: RRGAuthor[];
 }
 
 interface RRGAuthor {
@@ -169,6 +171,14 @@ export class RReadingGlassesProvider implements BookMetadataProvider {
 		const work = await this.fetchWork(parseInt(id, 10));
 		if (!work) return null;
 		return this.mapWorkToMetadata(work);
+	}
+
+	/**
+	 * Get raw work data including all editions
+	 * Useful for getting edition details needed by Readarr
+	 */
+	async getWorkById(workId: number): Promise<RRGWork | null> {
+		return this.fetchWork(workId);
 	}
 
 	/**

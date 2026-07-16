@@ -104,6 +104,7 @@ export interface ReadarrBook {
 	added: string;
 	remoteCover?: string;
 	grabbed?: boolean;
+	addOptions?: ReadarrAddBookOptions;
 }
 
 export interface ReadarrAddAuthorOptions {
@@ -123,6 +124,11 @@ export interface ReadarrAddAuthorRequest {
 	monitorNewItems: string;
 	tags: number[];
 	addOptions: ReadarrAddAuthorOptions;
+}
+
+export interface ReadarrAddBookOptions {
+	addType?: 'automatic' | 'manual';
+	searchForNewBook?: boolean;
 }
 
 export interface ReadarrCommand {

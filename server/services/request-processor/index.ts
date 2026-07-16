@@ -44,6 +44,7 @@ export class RequestProcessor {
 				new ReadarrClient({
 					url: instance.url,
 					apiKey: instance.apiKey,
+					rreadingGlassesUrl: process.env.RREADING_GLASSES_URL,
 				}));
 	}
 
@@ -204,6 +205,7 @@ export class RequestProcessor {
 				metadataProfiles[0].id,
 				rootFolders[0].path,
 				isbn,
+				book.title,
 			);
 
 			// Update request status to searching
@@ -223,6 +225,13 @@ export class RequestProcessor {
 			};
 		} catch (error) {
 			const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+			console.error(
+				`[RequestProcessor] Failed to process request for "${request.book.title}" by ${request.book.author}:`,
+				errorMessage,
+			);
+			if (error instanceof Error && error.stack) {
+				console.error(`[RequestProcessor] Stack trace:`, error.stack);
+			}
 			await this.updateRequestStatus(requestId, 'error', null, null, errorMessage);
 			return {
 				success: false,
