@@ -81,6 +81,8 @@ export class LibrarySyncService {
 	 * Sync books from a single Readarr instance
 	 */
 	async syncInstance(instance: ReadarrInstance): Promise<LibrarySyncResult> {
+		console.log(`[LibrarySync] Starting sync for instance "${instance.name}" (${instance.id})`);
+
 		const result: LibrarySyncResult = {
 			instanceId: instance.id,
 			instanceName: instance.name,
@@ -106,11 +108,13 @@ export class LibrarySyncService {
 			authorMap = new Map(authors.map((a) => [a.id!, a.authorName]));
 		} catch (error) {
 			const message = error instanceof Error ? error.message : 'Unknown error';
+			console.error(`[LibrarySync] Failed to fetch data from "${instance.name}": ${message}`);
 			result.errors.push(`Failed to fetch data: ${message}`);
 			return result;
 		}
 
 		result.booksFound = books.length;
+		console.log(`[LibrarySync] Found ${books.length} books in "${instance.name}"`);
 
 		// Only import books that are monitored or have files
 		const booksToImport = books.filter(shouldImportBook);
@@ -157,6 +161,12 @@ export class LibrarySyncService {
 				result.errors.push(`Failed to sync "${readarrBook.title}": ${message}`);
 			}
 		}
+
+		console.log(
+			`[LibrarySync] Completed sync for "${instance.name}": ` +
+				`${result.booksFound} found, ${result.booksImported} imported, ` +
+				`${result.booksCreated} created, ${result.booksUpdated} updated`,
+		);
 
 		return result;
 	}
@@ -273,12 +283,17 @@ export class LibrarySyncService {
 	 */
 	async syncAll(): Promise<LibrarySyncResult[]> {
 		const instances = getEnabledInstances();
+		console.log(`[LibrarySync] Starting sync for ${instances.length} instance(s)`);
+
 		const results: LibrarySyncResult[] = [];
 
 		for (const instance of instances) {
 			const result = await this.syncInstance(instance);
 			results.push(result);
 		}
+
+		const totalBooks = results.reduce((sum, r) => sum + r.booksFound, 0);
+		console.log(`[LibrarySync] Sync complete: ${totalBooks} total books across ${instances.length} instance(s)`);
 
 		return results;
 	}

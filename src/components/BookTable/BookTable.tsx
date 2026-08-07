@@ -13,16 +13,15 @@ import {
 	CircularProgress,
 } from '@mui/material';
 import { PlayArrow as RequestIcon, Sync as SyncIcon, Delete as DeleteIcon } from '@mui/icons-material';
-import type { BookWithRequests, ReadarrInstance, BookCategory, BookRequestResponse } from '../../types';
+import type { BookWithRequests, ReadarrInstance, BookRequestResponse } from '../../types';
 import { EditableCell } from './EditableCell';
 import { StatusChip } from './StatusChip';
-import { CategoryChip } from './CategoryChip';
 import { InstanceCheckboxes } from '../InstanceCheckboxes';
 
 interface BookTableProps {
 	books: BookWithRequests[];
 	instances: ReadarrInstance[];
-	onUpdateBook: (id: string, updates: { title?: string; author?: string; category?: BookCategory }) => Promise<void>;
+	onUpdateBook: (id: string, updates: { title?: string; author?: string }) => Promise<void>;
 	onDeleteBook: (id: string) => Promise<void>;
 	onProcessRequests: (id: string) => Promise<void>;
 	onSyncStatus: (id: string) => Promise<void>;
@@ -52,11 +51,6 @@ export function BookTable({
 
 	const handleAuthorSave = async (bookId: string, author: string) => {
 		await onUpdateBook(bookId, { author });
-	};
-
-	const handleCategoryToggle = async (book: BookWithRequests) => {
-		const newCategory: BookCategory = book.category === 'fiction' ? 'nonfiction' : 'fiction';
-		await onUpdateBook(book.id, { category: newCategory });
 	};
 
 	const handleProcessRequests = async (bookId: string) => {
@@ -140,9 +134,8 @@ export function BookTable({
 			<Table size='small'>
 				<TableHead>
 					<TableRow>
-						<TableCell sx={{ fontWeight: 600, width: '25%' }}>Title</TableCell>
-						<TableCell sx={{ fontWeight: 600, width: '20%' }}>Author</TableCell>
-						<TableCell sx={{ fontWeight: 600, width: '100px' }}>Category</TableCell>
+						<TableCell sx={{ fontWeight: 600, width: '30%' }}>Title</TableCell>
+						<TableCell sx={{ fontWeight: 600, width: '25%' }}>Author</TableCell>
 						<TableCell sx={{ fontWeight: 600, width: '200px' }}>Instances</TableCell>
 						<TableCell sx={{ fontWeight: 600, width: '100px' }}>Status</TableCell>
 						<TableCell sx={{ fontWeight: 600, width: '120px' }} align='right'>
@@ -153,7 +146,7 @@ export function BookTable({
 				<TableBody>
 					{books.length === 0 ? (
 						<TableRow>
-							<TableCell colSpan={6} align='center' sx={{ py: 4, color: 'text.secondary' }}>
+							<TableCell colSpan={5} align='center' sx={{ py: 4, color: 'text.secondary' }}>
 								No books yet. Add one above!
 							</TableCell>
 						</TableRow>
@@ -184,13 +177,6 @@ export function BookTable({
 											value={book.author}
 											onSave={(author) => handleAuthorSave(book.id, author)}
 											placeholder='Enter author'
-											disabled={isBusy}
-										/>
-									</TableCell>
-									<TableCell>
-										<CategoryChip
-											category={book.category}
-											onClick={() => handleCategoryToggle(book)}
 											disabled={isBusy}
 										/>
 									</TableCell>

@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { Box, Button, ToggleButton, ToggleButtonGroup, Paper, CircularProgress } from '@mui/material';
+import { useState, useEffect } from 'react';
+import { Box, Button, Paper, CircularProgress } from '@mui/material';
 import { Add as AddIcon } from '@mui/icons-material';
 import type { BookCategory, ReadarrInstance, CreateBookInput } from '../../types';
 import { InstanceCheckboxes } from '../InstanceCheckboxes';
@@ -7,13 +7,13 @@ import { BookAutocomplete, type BookSelection } from '../BookAutocomplete';
 
 interface AddBookRowProps {
 	instances: ReadarrInstance[];
+	category: BookCategory;
 	onAdd: (book: CreateBookInput, instanceIds: string[]) => Promise<void>;
 	disabled?: boolean;
 }
 
-export function AddBookRow({ instances, onAdd, disabled = false }: AddBookRowProps) {
+export function AddBookRow({ instances, category, onAdd, disabled = false }: AddBookRowProps) {
 	const [selectedBook, setSelectedBook] = useState<BookSelection | null>(null);
-	const [category, setCategory] = useState<BookCategory>('fiction');
 	const [selectedInstances, setSelectedInstances] = useState<string[]>([]);
 	const [isAdding, setIsAdding] = useState(false);
 
@@ -22,12 +22,6 @@ export function AddBookRow({ instances, onAdd, disabled = false }: AddBookRowPro
 		const defaultInstances = instances.filter((i) => i.category === category && i.enabled).map((i) => i.id);
 		setSelectedInstances(defaultInstances);
 	}, [category, instances]);
-
-	const handleCategoryChange = (_: React.MouseEvent<HTMLElement>, newCategory: BookCategory | null) => {
-		if (newCategory) {
-			setCategory(newCategory);
-		}
-	};
 
 	const handleAdd = async () => {
 		if (!selectedBook || !selectedBook.title.trim()) return;
@@ -64,20 +58,6 @@ export function AddBookRow({ instances, onAdd, disabled = false }: AddBookRowPro
 					disabled={disabled || isAdding}
 					placeholder='Search for a book...'
 				/>
-
-				<ToggleButtonGroup
-					value={category}
-					exclusive
-					onChange={handleCategoryChange}
-					size='small'
-					disabled={disabled || isAdding}>
-					<ToggleButton value='fiction' sx={{ px: 2 }}>
-						Fiction
-					</ToggleButton>
-					<ToggleButton value='nonfiction' sx={{ px: 2 }}>
-						Nonfiction
-					</ToggleButton>
-				</ToggleButtonGroup>
 
 				<Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
 					<InstanceCheckboxes

@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Helmet } from 'react-helmet-async';
-import { Typography, Box, Alert, Snackbar, Button, CircularProgress } from '@mui/material';
+import { Typography, Box, Alert, Snackbar, Button, CircularProgress, TablePagination, Tabs, Tab } from '@mui/material';
 import { Sync as SyncIcon, DeleteSweep as PurgeIcon } from '@mui/icons-material';
 
 import { APP_TITLE, PAGE_TITLE_HOME } from '../utils/constants';
@@ -32,12 +32,20 @@ export const Home = () => {
 	});
 	const [syncing, setSyncing] = useState(false);
 	const [purging, setPurging] = useState(false);
+	const [page, setPage] = useState(0);
+	const [rowsPerPage, setRowsPerPage] = useState(100);
+	const [totalBooks, setTotalBooks] = useState(0);
+	const [category, setCategory] = useState<BookCategory>('nonfiction');
 
 	const fetchData = useCallback(async () => {
 		try {
 			setLoading(true);
-			const [booksResponse, instancesData] = await Promise.all([getBooks(), getInstances()]);
+			const [booksResponse, instancesData] = await Promise.all([
+				getBooks({ category, limit: rowsPerPage, offset: page * rowsPerPage }),
+				getInstances(),
+			]);
 			setBooks(booksResponse.books);
+			setTotalBooks(booksResponse.total);
 			setInstances(instancesData);
 			setError(null);
 		} catch (err) {
@@ -46,7 +54,7 @@ export const Home = () => {
 		} finally {
 			setLoading(false);
 		}
-	}, []);
+	}, [category, page, rowsPerPage]);
 
 	useEffect(() => {
 		fetchData();
@@ -60,10 +68,19 @@ export const Home = () => {
 		setSnackbar((prev) => ({ ...prev, open: false }));
 	};
 
+	const handleTabChange = (_event: React.SyntheticEvent, newCategory: BookCategory) => {
+		setCategory(newCategory);
+		setPage(0);
+	};
+
 	const handleAddBook = async (input: CreateBookInput, _instanceIds: string[]) => {
 		try {
 			const newBook = await createBook(input);
-			setBooks((prev) => [newBook, ...prev]);
+			// Only add to current view if it matches the active category
+			if (newBook.category === category) {
+				setBooks((prev) => [newBook, ...prev]);
+				setTotalBooks((prev) => prev + 1);
+			}
 			showSnackbar(`Added "${input.title}"`, 'success');
 		} catch (err) {
 			const message = err instanceof ApiError ? err.message : 'Failed to add book';
@@ -72,10 +89,7 @@ export const Home = () => {
 		}
 	};
 
-	const handleUpdateBook = async (
-		id: string,
-		updates: { title?: string; author?: string; category?: BookCategory },
-	) => {
+	const handleUpdateBook = async (id: string, updates: { title?: string; author?: string }) => {
 		try {
 			const updatedBook = await updateBook(id, updates);
 			setBooks((prev) => prev.map((book) => (book.id === id ? updatedBook : book)));
@@ -90,6 +104,7 @@ export const Home = () => {
 		try {
 			await deleteBook(id);
 			setBooks((prev) => prev.filter((book) => book.id !== id));
+			setTotalBooks((prev) => prev - 1);
 			showSnackbar('Book deleted', 'success');
 		} catch (err) {
 			const message = err instanceof ApiError ? err.message : 'Failed to delete book';
@@ -201,6 +216,7 @@ export const Home = () => {
 			const response = await purgeLibrary();
 
 			// Refresh books after purge
+			setPage(0);
 			await fetchData();
 
 			showSnackbar(`Deleted ${response.deletedBooks} books`, 'success');
@@ -210,6 +226,15 @@ export const Home = () => {
 		} finally {
 			setPurging(false);
 		}
+	};
+
+	const handleChangePage = (_event: unknown, newPage: number) => {
+		setPage(newPage);
+	};
+
+	const handleChangeRowsPerPage = (event: React.ChangeEvent<{ value: unknown }>) => {
+		setRowsPerPage(parseInt(event.target.value as string, 10));
+		setPage(0);
 	};
 
 	return (
@@ -255,7 +280,12 @@ export const Home = () => {
 					</Alert>
 				)}
 
-				<AddBookRow instances={instances} onAdd={handleAddBook} disabled={loading} />
+				<Tabs value={category} onChange={handleTabChange} sx={{ mb: 2 }}>
+					<Tab label='Fiction' value='fiction' />
+					<Tab label='Nonfiction' value='nonfiction' />
+				</Tabs>
+
+				<AddBookRow instances={instances} category={category} onAdd={handleAddBook} disabled={loading} />
 
 				<BookTable
 					books={books}
@@ -266,6 +296,16 @@ export const Home = () => {
 					onSyncStatus={handleSyncStatus}
 					onAddToInstance={handleAddToInstance}
 					loading={loading}
+				/>
+
+				<TablePagination
+					component='div'
+					count={totalBooks}
+					page={page}
+					onPageChange={handleChangePage}
+					rowsPerPage={rowsPerPage}
+					onRowsPerPageChange={handleChangeRowsPerPage}
+					rowsPerPageOptions={[25, 50, 100]}
 				/>
 			</Box>
 
