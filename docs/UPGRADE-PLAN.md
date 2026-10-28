@@ -40,3 +40,10 @@ Schema: add `phase`, `lastError`, `lastErrorAt`, and `attempts` to BookRequest, 
    - Retry the 3 errored requests through the new path.
 2. **Quick add:** type-ahead with Enter-to-add, genre-based category guess, audio + ebook by default.
 3. **Iris CLI + skill:** search / add / list / status / retry, with `--json` output.
+
+## Status (Oct 28 2026)
+All three phases shipped and deployed (image `julianh2o/bookwyrm:fc5a93b`):
+- Library import: 103 books / 146 requests from the 4 instances; the 3 aborted requests were resolved
+  (2 had actually finished in Readarr and got linked, 1 was re-added via retry).
+- Import retry verified for real: "Never Split the Difference" (NFE) force-imported and is now available.
+- CLI: `cli/bookwyrm.py` (symlinked as `bookwyrm`), used by Iris via the `bookwyrm` Hermes skill.
