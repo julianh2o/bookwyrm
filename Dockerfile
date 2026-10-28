@@ -60,6 +60,9 @@ WORKDIR /app
 # Copy package files
 COPY package.json yarn.lock .yarnrc ./
 
+# Default DATABASE_URL (prisma.config.ts needs it at install time too)
+ENV DATABASE_URL="file:./data/db.db"
+
 # Prisma schema/config/migrations first: postinstall runs `prisma generate`, and the
 # prisma CLI is a runtime dependency because the container runs `prisma migrate deploy` on start
 COPY prisma ./prisma
@@ -73,8 +76,6 @@ RUN yarn install --frozen-lockfile --production && \
 COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
 COPY --from=builder /app/node_modules/@prisma ./node_modules/@prisma
 
-# Set dummy DATABASE_URL for runtime
-ENV DATABASE_URL="file:./data/db.db"
 
 # Copy entire build directory from builder stage
 # This contains: compiled server code, frontend (in public/), and config files
