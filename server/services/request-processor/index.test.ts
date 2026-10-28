@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { RequestProcessor } from './index';
+import { RequestProcessor, pickQualityProfile } from './index';
 import { prisma } from '../../db';
 import type { ReadarrInstance } from '../../config/readarr';
 import type { ReadarrClient, ReadarrBook } from '../readarr';
@@ -228,5 +228,16 @@ describe('RequestProcessor matching', () => {
 		});
 		expect(match([omnibus], 'The Martian', 'Andy Weir')).toBeNull();
 		expect(match([namesake, right], 'Piranesi', 'Susanna Clarke')).toBe(right);
+	});
+});
+
+describe('pickQualityProfile', () => {
+	const profiles = [
+		{ id: 1, name: 'eBook' },
+		{ id: 2, name: 'Spoken' },
+	];
+	it('uses the Spoken profile for audiobook instances and eBook for ebook ones', () => {
+		expect(pickQualityProfile(profiles, 'audio').id).toBe(2);
+		expect(pickQualityProfile(profiles, 'ebook').id).toBe(1);
 	});
 });

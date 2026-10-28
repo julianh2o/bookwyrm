@@ -23,6 +23,16 @@ function getIsbnFromBook(book: ReadarrBook): string | undefined {
 	return undefined;
 }
 
+/**
+ * Each instance has both an "eBook" and a "Spoken" profile; the first one is eBook even on the
+ * audiobook instances, so picking [0] made audiobooks reject every M4B/MP3 release.
+ */
+export function pickQualityProfile<T extends { id: number; name: string }>(profiles: T[], type: 'audio' | 'ebook'): T {
+	const audio = /spoken|audio|m4b|mp3/i;
+	const match = profiles.find((p) => (type === 'audio' ? audio.test(p.name) : !audio.test(p.name)));
+	return match ?? profiles[0];
+}
+
 export interface ProcessResult {
 	success: boolean;
 	status: 'searching' | 'error';
@@ -194,7 +204,7 @@ export class RequestProcessor {
 				book.foreignBookId,
 				foreignAuthorId,
 				authorName,
-				qualityProfiles[0].id,
+				pickQualityProfile(qualityProfiles, instance.type).id,
 				metadataProfiles[0].id,
 				rootFolders[0].path,
 				isbn,
