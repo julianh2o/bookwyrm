@@ -8,21 +8,17 @@ RUN apt-get update -y && apt-get install -y openssl && rm -rf /var/lib/apt/lists
 
 WORKDIR /app
 
-# Copy package files
+# Copy package files, plus the Prisma schema/config that the postinstall `prisma generate` needs
 COPY package.json yarn.lock .yarnrc ./
+COPY prisma ./prisma
+COPY prisma.config.ts ./
+ENV DATABASE_URL="file:./data/db.db"
 
 # Install dependencies
 RUN yarn install --frozen-lockfile
 
 # Copy source code
 COPY . .
-
-# Copy Prisma schema and config
-COPY prisma ./prisma
-COPY prisma.config.ts ./
-
-# Generate Prisma Client (set dummy DATABASE_URL for build)
-ENV DATABASE_URL="file:./data/db.db"
 RUN npx prisma generate
 
 # Build the server first (compile TypeScript to JavaScript -> build/)
