@@ -60,13 +60,14 @@ WORKDIR /app
 # Copy package files
 COPY package.json yarn.lock .yarnrc ./
 
+# Prisma schema/config/migrations first: postinstall runs `prisma generate`, and the
+# prisma CLI is a runtime dependency because the container runs `prisma migrate deploy` on start
+COPY prisma ./prisma
+COPY prisma.config.ts ./
+
 # Install production dependencies only
 RUN yarn install --frozen-lockfile --production && \
     yarn cache clean
-
-# Copy Prisma schema, config, and migrations
-COPY prisma ./prisma
-COPY prisma.config.ts ./
 
 # Copy generated Prisma Client from builder stage
 COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
@@ -92,4 +93,4 @@ ENV NODE_ENV=production
 ENV APP_VERSION="${VERSION}"
 
 # Start the server (run migrations first)
-CMD ["sh", "-c", "npx prisma migrate deploy && NODE_ENV=production node build/index.js"]
+CMD ["sh", "-c", "npx --no-install prisma migrate deploy && NODE_ENV=production node build/index.js"]
