@@ -1,6 +1,12 @@
 import { prisma } from '../../db';
 import { getInstanceById, type ReadarrInstance } from '../../config/readarr';
 import { ReadarrClient, type ReadarrBook, type ReadarrAuthor } from '../readarr';
+import { ReadarrTimeoutError } from '../readarr/client';
+import { recordEvent } from '../tracker/events';
+import { authorsOverlap, normalizeTitle } from '../tracker/state';
+
+/** Adding an author makes Readarr fetch all of their metadata, which can take minutes */
+const ADD_TIMEOUT_MS = 180000;
 
 /**
  * Extract ISBN from Readarr book editions
@@ -19,7 +25,7 @@ function getIsbnFromBook(book: ReadarrBook): string | undefined {
 
 export interface ProcessResult {
 	success: boolean;
-	status: 'searching' | 'not_found' | 'error';
+	status: 'searching' | 'error';
 	externalId?: string;
 	externalSlug?: string;
 	errorMessage?: string;
@@ -44,6 +50,7 @@ export class RequestProcessor {
 				new ReadarrClient({
 					url: instance.url,
 					apiKey: instance.apiKey,
+					timeout: ADD_TIMEOUT_MS,
 					rreadingGlassesUrl: process.env.RREADING_GLASSES_URL,
 				}));
 	}
@@ -88,28 +95,46 @@ export class RequestProcessor {
 		}
 
 		const client = this.createClient(instance);
+		await prisma.bookRequest.update({
+			where: { id: requestId },
+			data: { status: 'adding', phase: 'add', errorMessage: null, attempts: { increment: 1 } },
+		});
+		await recordEvent(requestId, 'add', 'info', `Adding to ${instance.name}`);
 
 		try {
-			// Search for the book in Readarr
-			const searchTerm = `${request.book.title} ${request.book.author}`;
-			const searchResults = await client.searchBooks(searchTerm);
+			const metadataId = request.book.metadataId;
 
-			if (searchResults.length === 0) {
-				await this.updateRequestStatus(requestId, 'not_found', null, null, 'Book not found in Readarr search');
-				return {
-					success: true,
-					status: 'not_found',
-				};
+			// Already in Readarr (e.g. added there by hand, or an earlier add that timed out on our side)?
+			const library = await client.getBooks();
+			const inLibrary =
+				(metadataId ? library.find((b) => b.foreignBookId === metadataId) : undefined) ??
+				library.find((b) => normalizeTitle(b.title) === normalizeTitle(request.book.title) && b.monitored);
+			if (inLibrary?.id) {
+				if (!inLibrary.monitored) {
+					inLibrary.monitored = true;
+					await client.updateBook(inLibrary);
+				}
+				await client.searchBook([inLibrary.id]);
+				return this.succeed(requestId, inLibrary.id, inLibrary.titleSlug, 'Already in Readarr; search triggered');
 			}
 
-			// Find the best match (exact title match preferred)
-			const book = this.findBestMatch(searchResults, request.book.title, request.book.author);
+			// Look it up: by work id first (exact), then by title + author
+			let searchResults: ReadarrBook[] = [];
+			if (metadataId && /^\d+$/.test(metadataId)) {
+				searchResults = await client.searchBooks(`work:${metadataId}`);
+			}
+			let book = this.findBestMatch(searchResults, request.book.title, request.book.author, metadataId);
 			if (!book) {
-				await this.updateRequestStatus(requestId, 'not_found', null, null, 'No matching book found in search results');
-				return {
-					success: true,
-					status: 'not_found',
-				};
+				searchResults = await client.searchBooks(`${request.book.title} ${request.book.author}`);
+				book = this.findBestMatch(searchResults, request.book.title, request.book.author, metadataId);
+			}
+			if (!book) {
+				return this.fail(
+					requestId,
+					searchResults.length === 0
+						? `Readarr's metadata search found nothing for "${request.book.title}"`
+						: `Readarr's search didn't return a match for "${request.book.title}" by ${request.book.author}`,
+				);
 			}
 
 			// Get Readarr configuration for adding author
@@ -120,21 +145,14 @@ export class RequestProcessor {
 			]);
 
 			if (qualityProfiles.length === 0 || metadataProfiles.length === 0 || rootFolders.length === 0) {
-				await this.updateRequestStatus(requestId, 'error', null, null, 'Readarr instance not properly configured');
-				return {
-					success: false,
-					status: 'error',
-					errorMessage: 'Readarr instance not properly configured (missing profiles or root folder)',
-				};
+				return this.fail(requestId, 'Readarr instance not properly configured (missing profiles or root folder)');
 			}
 
-			// Get author foreignAuthorId - search for author if not present in book result
-			// Prefer Readarr's author data, then try extracting from authorTitle, then fallback to our DB
-			let authorName: string = request.book.author; // Default to our database value
+			// Prefer Readarr's author data, then authorTitle ("Author Name - Book Title"), then our DB
+			let authorName: string = request.book.author;
 			if (book.author?.authorName) {
 				authorName = book.author.authorName;
 			} else if (book.authorTitle) {
-				// authorTitle is "Author Name - Book Title", extract just the author
 				const dashIndex = book.authorTitle.indexOf(' - ');
 				if (dashIndex > 0) {
 					authorName = book.authorTitle.substring(0, dashIndex).trim();
@@ -142,17 +160,11 @@ export class RequestProcessor {
 			}
 
 			let foreignAuthorId = book.author?.foreignAuthorId;
-
 			if (!foreignAuthorId) {
-				// Search for the author to get their foreignAuthorId
 				const authorResults = await client.searchAuthors(authorName);
-
-				// Try exact match first
 				let matchingAuthor = authorResults.find(
 					(a) => a.authorName.toLowerCase() === authorName.toLowerCase() && a.foreignAuthorId,
 				);
-
-				// If no exact match, try partial match (author name contains or is contained)
 				if (!matchingAuthor) {
 					const normalizedSearch = authorName.toLowerCase();
 					matchingAuthor = authorResults.find((a) => {
@@ -163,40 +175,22 @@ export class RequestProcessor {
 						);
 					});
 				}
-
-				if (matchingAuthor) {
-					foreignAuthorId = matchingAuthor.foreignAuthorId;
-					authorName = matchingAuthor.authorName; // Use the canonical name from Readarr
-				} else {
-					await this.updateRequestStatus(
-						requestId,
-						'error',
-						null,
-						null,
-						`Could not find author "${authorName}" in Readarr`,
-					);
-					return {
-						success: false,
-						status: 'error',
-						errorMessage: `Could not find author "${authorName}" in Readarr`,
-					};
+				if (!matchingAuthor) {
+					return this.fail(requestId, `Could not find author "${authorName}" in Readarr`);
 				}
+				foreignAuthorId = matchingAuthor.foreignAuthorId;
+				authorName = matchingAuthor.authorName;
 			}
 
 			// Get ISBN - prefer our database, fallback to Readarr search result
 			let isbn = request.book.isbn;
 			if (!isbn) {
 				isbn = getIsbnFromBook(book) ?? null;
-				// Update our database with the ISBN if we found one
 				if (isbn) {
-					await prisma.book.update({
-						where: { id: request.book.id },
-						data: { isbn },
-					});
+					await prisma.book.update({ where: { id: request.book.id }, data: { isbn } });
 				}
 			}
 
-			// Add the book and trigger search
 			const result = await client.addAndSearchBook(
 				book.foreignBookId,
 				foreignAuthorId,
@@ -208,37 +202,42 @@ export class RequestProcessor {
 				book.title,
 			);
 
-			// Update request status to searching
-			await this.updateRequestStatus(
-				requestId,
-				'searching',
-				result.book.id?.toString() ?? null,
-				result.book.titleSlug ?? null,
-				null,
-			);
-
-			return {
-				success: true,
-				status: 'searching',
-				externalId: result.book.id?.toString(),
-				externalSlug: result.book.titleSlug,
-			};
+			return this.succeed(requestId, result.book.id!, result.book.titleSlug, 'Added to Readarr; search triggered');
 		} catch (error) {
-			const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-			console.error(
-				`[RequestProcessor] Failed to process request for "${request.book.title}" by ${request.book.author}:`,
-				errorMessage,
-			);
-			if (error instanceof Error && error.stack) {
-				console.error(`[RequestProcessor] Stack trace:`, error.stack);
+			let errorMessage = error instanceof Error ? error.message : 'Unknown error';
+			if (error instanceof ReadarrTimeoutError) {
+				errorMessage += '. It may still finish in Readarr; the next check will pick it up.';
 			}
-			await this.updateRequestStatus(requestId, 'error', null, null, errorMessage);
-			return {
-				success: false,
-				status: 'error',
-				errorMessage,
-			};
+			console.error(`[RequestProcessor] Failed to add "${request.book.title}" to ${instance.id}:`, errorMessage);
+			return this.fail(requestId, errorMessage);
 		}
+	}
+
+	private async succeed(
+		requestId: string,
+		readarrBookId: number,
+		slug: string | undefined,
+		message: string,
+	): Promise<ProcessResult> {
+		await prisma.bookRequest.update({
+			where: { id: requestId },
+			data: {
+				status: 'searching',
+				phase: 'search',
+				externalId: String(readarrBookId),
+				externalSlug: slug ?? null,
+				errorMessage: null,
+				lastSearchAt: new Date(),
+				lastChecked: new Date(),
+			},
+		});
+		await recordEvent(requestId, 'search', 'info', message);
+		return { success: true, status: 'searching', externalId: String(readarrBookId), externalSlug: slug };
+	}
+
+	private async fail(requestId: string, errorMessage: string): Promise<ProcessResult> {
+		await this.updateRequestStatus(requestId, 'error', null, null, errorMessage);
+		return { success: false, status: 'error', errorMessage };
 	}
 
 	/**
@@ -291,32 +290,25 @@ export class RequestProcessor {
 		results: ReadarrBook[],
 		title: string,
 		author: string,
+		metadataId?: string | null,
 	): (ReadarrBook & { author?: ReadarrAuthor }) | null {
-		const normalizedTitle = title.toLowerCase().trim();
-		const normalizedAuthor = author.toLowerCase().trim();
-
-		// First try exact title match
-		for (const book of results) {
-			if (book.title.toLowerCase().trim() === normalizedTitle) {
-				return book;
-			}
+		if (metadataId) {
+			const exact = results.find((b) => b.foreignBookId === metadataId);
+			if (exact) return exact;
 		}
-
-		// Then try title contains match with author check
-		for (const book of results) {
-			const bookTitle = book.title.toLowerCase();
-			const bookAuthor = book.author?.authorName?.toLowerCase() ?? '';
-
-			if (
-				(bookTitle.includes(normalizedTitle) || normalizedTitle.includes(bookTitle)) &&
-				(bookAuthor.includes(normalizedAuthor) || normalizedAuthor.includes(bookAuthor))
-			) {
-				return book;
-			}
-		}
-
-		// Finally, just return the first result if no better match
-		return results[0] ?? null;
+		// Same title (exact, then ignoring subtitles/punctuation) by an overlapping author.
+		// Never fall back to "first result": that's how omnibuses and namesakes get added.
+		const sameAuthor = (b: ReadarrBook & { author?: ReadarrAuthor }) => {
+			const name = b.author?.authorName ?? (b.authorTitle?.includes(' - ') ? b.authorTitle.split(' - ')[0] : '');
+			return !name || authorsOverlap(name, author);
+		};
+		const exactTitle = title.toLowerCase().trim();
+		const loose = normalizeTitle(title);
+		return (
+			results.find((b) => b.title.toLowerCase().trim() === exactTitle && sameAuthor(b)) ??
+			results.find((b) => normalizeTitle(b.title) === loose && sameAuthor(b)) ??
+			null
+		);
 	}
 
 	/**
@@ -333,12 +325,17 @@ export class RequestProcessor {
 			where: { id: requestId },
 			data: {
 				status,
+				phase: 'add',
 				externalId,
 				externalSlug,
 				errorMessage,
 				lastChecked: new Date(),
+				...(status === 'error' ? { lastErrorAt: new Date() } : {}),
 			},
 		});
+		if (errorMessage) {
+			await recordEvent(requestId, 'add', 'error', errorMessage);
+		}
 	}
 }
 

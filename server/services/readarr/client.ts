@@ -8,6 +8,10 @@ import type {
 	ReadarrQualityProfile,
 	ReadarrMetadataProfile,
 	ReadarrRootFolder,
+	ReadarrQueueItem,
+	ReadarrPaged,
+	ReadarrHistoryItem,
+	ReadarrManualImportItem,
 } from './types';
 import { RReadingGlassesProvider, type RRGWork, type RRGBook } from '../metadata/rreading-glasses';
 
@@ -17,6 +21,14 @@ export interface ReadarrClientConfig {
 	timeout?: number;
 	/** rreading-glasses base URL for fetching edition data */
 	rreadingGlassesUrl?: string;
+}
+
+/** Thrown when Readarr doesn't respond in time. The operation may still finish on Readarr's side. */
+export class ReadarrTimeoutError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = 'ReadarrTimeoutError';
+	}
 }
 
 export class ReadarrClient {
@@ -160,7 +172,7 @@ export class ReadarrClient {
 	/**
 	 * Get command status
 	 */
-	async getCommand(commandId: number): Promise<ReadarrCommandResponse> {
+	async getCommand(commandId: number): Promise<ReadarrCommandResponse & { message?: string }> {
 		return this.get<ReadarrCommandResponse>(`/api/v1/command/${commandId}`);
 	}
 
@@ -198,6 +210,83 @@ export class ReadarrClient {
 	 */
 	async getRootFolders(): Promise<ReadarrRootFolder[]> {
 		return this.get<ReadarrRootFolder[]>('/api/v1/rootfolder');
+	}
+
+	/**
+	 * Get the whole download queue (including items Readarr couldn't match to a book)
+	 */
+	async getQueue(): Promise<ReadarrQueueItem[]> {
+		const page = await this.get<ReadarrPaged<ReadarrQueueItem>>('/api/v1/queue', {
+			page: '1',
+			pageSize: '1000',
+			includeUnknownAuthorItems: 'true',
+		});
+		return page.records;
+	}
+
+	/**
+	 * Recent history, newest first. Optionally filtered by book or event type.
+	 */
+	async getHistory(
+		opts: { bookId?: number; eventType?: number; pageSize?: number } = {},
+	): Promise<ReadarrHistoryItem[]> {
+		const params: Record<string, string> = {
+			page: '1',
+			pageSize: String(opts.pageSize ?? 50),
+			sortKey: 'date',
+			sortDirection: 'descending',
+		};
+		if (opts.bookId !== undefined) params.bookId = String(opts.bookId);
+		if (opts.eventType !== undefined) params.eventType = String(opts.eventType);
+		const page = await this.get<ReadarrPaged<ReadarrHistoryItem>>('/api/v1/history', params);
+		return page.records;
+	}
+
+	/**
+	 * Remove a queue item, optionally removing it from the download client and blocklisting the release
+	 */
+	async removeQueueItem(queueId: number, opts: { removeFromClient: boolean; blocklist: boolean }): Promise<void> {
+		await this.delete(
+			`/api/v1/queue/${queueId}?removeFromClient=${opts.removeFromClient}&blocklist=${opts.blocklist}&skipRedownload=true`,
+		);
+	}
+
+	/**
+	 * Ask Readarr what it would import from a finished download folder
+	 */
+	async getManualImport(folder: string, downloadId?: string): Promise<ReadarrManualImportItem[]> {
+		const params: Record<string, string> = { folder, filterExistingFiles: 'true', replaceExistingFiles: 'false' };
+		if (downloadId) params.downloadId = downloadId;
+		return this.get<ReadarrManualImportItem[]>('/api/v1/manualimport', params);
+	}
+
+	/**
+	 * Import specific files as a specific book (what you'd do by hand in Readarr's import dialog)
+	 */
+	async manualImport(
+		files: Array<{
+			path: string;
+			authorId: number;
+			bookId: number;
+			foreignEditionId?: string | null;
+			quality: unknown;
+			releaseGroup?: string | null;
+			downloadId?: string;
+			indexerFlags?: number;
+		}>,
+	): Promise<ReadarrCommandResponse> {
+		return this.post<ReadarrCommandResponse>('/api/v1/command', {
+			name: 'ManualImport',
+			importMode: 'auto',
+			replaceExistingFiles: false,
+			files: files.map((f) => ({
+				...f,
+				indexerFlags: f.indexerFlags ?? 0,
+				additionalFile: false,
+				replaceExistingFiles: false,
+				disableReleaseSwitching: false,
+			})),
+		});
 	}
 
 	/**
@@ -587,6 +676,17 @@ export class ReadarrClient {
 			}
 
 			return response;
+		} catch (error) {
+			if (error instanceof Error && error.name === 'AbortError') {
+				const pathOnly = url.replace(this.baseUrl, '').split('?')[0];
+				throw new ReadarrTimeoutError(
+					`Readarr didn't answer within ${Math.round(this.timeout / 1000)}s (${options.method} ${pathOnly})`,
+				);
+			}
+			if (error instanceof TypeError) {
+				throw new Error(`Couldn't reach Readarr at ${this.baseUrl}: ${error.message}`);
+			}
+			throw error;
 		} finally {
 			clearTimeout(timeoutId);
 		}

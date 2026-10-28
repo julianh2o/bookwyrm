@@ -17,6 +17,8 @@ interface BookAutocompleteProps {
 	onChange: (book: BookSelection | null) => void;
 	disabled?: boolean;
 	placeholder?: string;
+	/** Lets the parent put focus back in the search box after adding */
+	inputRef?: React.Ref<React.ElementRef<'input'>>;
 }
 
 // Custom option type that includes a manual entry option
@@ -31,6 +33,7 @@ export function BookAutocomplete({
 	onChange,
 	disabled = false,
 	placeholder = 'Search for a book...',
+	inputRef,
 }: BookAutocompleteProps) {
 	const [inputValue, setInputValue] = useState('');
 	const [options, setOptions] = useState<AutocompleteOption[]>([]);
@@ -237,6 +240,7 @@ export function BookAutocomplete({
 				return (
 					<TextField
 						{...params}
+						inputRef={inputRef}
 						placeholder={value ? '' : placeholder}
 						size='small'
 						InputProps={{

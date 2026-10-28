@@ -2,7 +2,8 @@
  * Integration tests for ReadarrClient
  *
  * These tests connect to real Readarr instances to verify API behavior.
- * Run with: yarn test:server --run client.integration
+ * Skipped by default (they talk to the real instances in config/readarr.json).
+ * Run with: READARR_INTEGRATION=1 yarn test:server --run client.integration
  *
  * To run the addAndSearchBook test:
  *   RUN_ADD_BOOK_TEST=1 yarn test:server --run client.integration
@@ -10,7 +11,9 @@
 
 import { describe, it, expect, beforeAll } from 'vitest';
 import { ReadarrClient } from './client';
-import { loadReadarrConfig } from '../../config/readarr';
+import fs from 'fs';
+import path from 'path';
+import type { ReadarrConfig } from '../../config/readarr';
 import type { ReadarrBook, ReadarrAuthor } from './types';
 
 // Test book configuration - change these to test with different books
@@ -23,13 +26,15 @@ const TEST_BOOK = {
 	isbn: '',
 };
 
-describe('ReadarrClient Integration', () => {
+describe.skipIf(!process.env.READARR_INTEGRATION)('ReadarrClient Integration', () => {
 	let client: ReadarrClient;
 	let baseUrl: string;
 	let apiKey: string;
 
 	beforeAll(() => {
-		const config = loadReadarrConfig();
+		const config = JSON.parse(
+			fs.readFileSync(path.join(process.cwd(), 'config', 'readarr.json'), 'utf-8'),
+		) as ReadarrConfig;
 		const instance = config.instances.find((i) => i.enabled);
 
 		if (!instance) {
@@ -239,7 +244,9 @@ describe('ReadarrClient Integration', () => {
 	it.skipIf(!process.env.RUN_ADD_BOOK_TEST)(
 		'should add a book and trigger search',
 		async () => {
-			const config = loadReadarrConfig();
+			const config = JSON.parse(
+				fs.readFileSync(path.join(process.cwd(), 'config', 'readarr.json'), 'utf-8'),
+			) as ReadarrConfig;
 			const instance = config.instances.find((i) => i.enabled);
 			if (!instance) throw new Error('No enabled instance');
 

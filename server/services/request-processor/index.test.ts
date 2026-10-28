@@ -1,547 +1,230 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { RequestProcessor } from './index';
 import { prisma } from '../../db';
 import type { ReadarrInstance } from '../../config/readarr';
-import type { ReadarrClient } from '../readarr';
+import type { ReadarrClient, ReadarrBook } from '../readarr';
+import { ReadarrTimeoutError } from '../readarr/client';
 
-// Mock the config module
 vi.mock('../../config/readarr', () => ({
 	getInstanceById: vi.fn(),
 }));
 
-// Mock prisma
 vi.mock('../../db', () => ({
 	prisma: {
-		bookRequest: {
-			findUnique: vi.fn(),
-			findMany: vi.fn(),
-			update: vi.fn(),
-		},
+		bookRequest: { findUnique: vi.fn(), findMany: vi.fn(), update: vi.fn() },
+		book: { update: vi.fn() },
+		requestEvent: { create: vi.fn(), findMany: vi.fn().mockResolvedValue([]), deleteMany: vi.fn() },
 	},
 }));
 
 import { getInstanceById } from '../../config/readarr';
 
-describe('RequestProcessor', () => {
-	let processor: RequestProcessor;
-	let mockClient: Partial<ReadarrClient>;
+const instance: ReadarrInstance = {
+	id: 'fiction-audio',
+	name: 'Fiction Audiobooks',
+	url: 'https://readarr.example.com',
+	apiKey: 'test-key',
+	type: 'audio',
+	category: 'fiction',
+	enabled: true,
+};
 
-	const mockInstance: ReadarrInstance = {
-		id: 'fiction-audio',
-		name: 'Fiction Audiobooks',
-		url: 'https://readarr.example.com',
-		apiKey: 'test-key',
-		type: 'audio',
-		category: 'fiction',
-		enabled: true,
-	};
+const baseBook = {
+	id: 'book-1',
+	title: 'The Martian',
+	author: 'Andy Weir',
+	isbn: null,
+	category: 'fiction',
+	coverUrl: null,
+	notes: null,
+	metadataId: null as string | null,
+	metadataProvider: null as string | null,
+	createdAt: new Date(),
+	updatedAt: new Date(),
+};
 
-	const mockBook = {
-		id: 'book-1',
-		title: 'The Martian',
-		author: 'Andy Weir',
-		isbn: null,
-		category: 'fiction',
-		coverUrl: null,
-		notes: null,
-		metadataId: null,
-		metadataProvider: null,
-		createdAt: new Date(),
-		updatedAt: new Date(),
-	};
-
-	const mockRequest = {
+function makeRequest(book = baseBook) {
+	return {
 		id: 'request-1',
-		bookId: 'book-1',
+		bookId: book.id,
 		instanceId: 'fiction-audio',
 		status: 'pending',
+		phase: 'add',
 		externalId: null,
 		errorMessage: null,
 		createdAt: new Date(),
 		updatedAt: new Date(),
 		lastChecked: null,
-		book: mockBook,
+		book,
 	};
+}
+
+function readarrBook(overrides: Partial<ReadarrBook> = {}): ReadarrBook {
+	return {
+		id: 42,
+		title: 'The Martian',
+		authorTitle: 'Andy Weir - The Martian',
+		seriesTitle: '',
+		disambiguation: '',
+		authorId: 7,
+		foreignBookId: 'work-1',
+		titleSlug: 'the-martian',
+		monitored: true,
+		anyEditionOk: true,
+		ratings: { votes: 0, value: 0, popularity: 0 },
+		pageCount: 0,
+		genres: [],
+		images: [],
+		links: [],
+		added: '',
+		author: { authorName: 'Andy Weir', foreignAuthorId: 'author-weir' } as ReadarrBook['author'],
+		...overrides,
+	};
+}
+
+/** The last data written to the request */
+function lastUpdate() {
+	const calls = vi.mocked(prisma.bookRequest.update).mock.calls;
+	return calls[calls.length - 1][0].data as Record<string, unknown>;
+}
+
+describe('RequestProcessor', () => {
+	let processor: RequestProcessor;
+	let client: Record<string, ReturnType<typeof vi.fn>>;
 
 	beforeEach(() => {
 		vi.clearAllMocks();
-
-		mockClient = {
-			searchBooks: vi.fn(),
-			searchAuthors: vi.fn(),
-			getQualityProfiles: vi.fn(),
-			getMetadataProfiles: vi.fn(),
-			getRootFolders: vi.fn(),
+		client = {
+			getBooks: vi.fn().mockResolvedValue([]),
+			updateBook: vi.fn(),
+			searchBook: vi.fn().mockResolvedValue({ id: 1 }),
+			searchBooks: vi.fn().mockResolvedValue([]),
+			searchAuthors: vi.fn().mockResolvedValue([]),
+			getQualityProfiles: vi.fn().mockResolvedValue([{ id: 1, name: 'Any' }]),
+			getMetadataProfiles: vi.fn().mockResolvedValue([{ id: 2, name: 'Standard' }]),
+			getRootFolders: vi.fn().mockResolvedValue([{ id: 1, path: '/books', accessible: true, freeSpace: 0 }]),
 			addAndSearchBook: vi.fn(),
 		};
-
-		processor = new RequestProcessor({
-			createClient: () => mockClient as ReadarrClient,
-		});
+		processor = new RequestProcessor({ createClient: () => client as unknown as ReadarrClient });
+		vi.mocked(getInstanceById).mockReturnValue(instance);
 	});
 
-	afterEach(() => {
-		vi.resetAllMocks();
+	it('returns an error when the request does not exist', async () => {
+		vi.mocked(prisma.bookRequest.findUnique).mockResolvedValue(null);
+		const result = await processor.processRequest('missing');
+		expect(result).toMatchObject({ success: false, status: 'error', errorMessage: 'Request not found' });
 	});
 
-	describe('processRequest', () => {
-		it('should return error if request not found', async () => {
-			vi.mocked(prisma.bookRequest.findUnique).mockResolvedValue(null);
-
-			const result = await processor.processRequest('non-existent');
-
-			expect(result.success).toBe(false);
-			expect(result.status).toBe('error');
-			expect(result.errorMessage).toBe('Request not found');
-		});
-
-		it('should return error if instance not found', async () => {
-			vi.mocked(prisma.bookRequest.findUnique).mockResolvedValue(mockRequest as any);
-			vi.mocked(getInstanceById).mockReturnValue(undefined);
-
-			const result = await processor.processRequest('request-1');
-
-			expect(result.success).toBe(false);
-			expect(result.status).toBe('error');
-			expect(result.errorMessage).toContain('not found');
-			expect(prisma.bookRequest.update).toHaveBeenCalledWith(
-				expect.objectContaining({
-					where: { id: 'request-1' },
-					data: expect.objectContaining({ status: 'error' }),
-				}),
-			);
-		});
-
-		it('should return error if instance is disabled', async () => {
-			vi.mocked(prisma.bookRequest.findUnique).mockResolvedValue(mockRequest as any);
-			vi.mocked(getInstanceById).mockReturnValue({ ...mockInstance, enabled: false });
-
-			const result = await processor.processRequest('request-1');
-
-			expect(result.success).toBe(false);
-			expect(result.status).toBe('error');
-			expect(result.errorMessage).toContain('disabled');
-		});
-
-		it('should return not_found if book not in Readarr', async () => {
-			vi.mocked(prisma.bookRequest.findUnique).mockResolvedValue(mockRequest as any);
-			vi.mocked(getInstanceById).mockReturnValue(mockInstance);
-			vi.mocked(mockClient.searchBooks).mockResolvedValue([]);
-
-			const result = await processor.processRequest('request-1');
-
-			expect(result.success).toBe(true);
-			expect(result.status).toBe('not_found');
-			expect(prisma.bookRequest.update).toHaveBeenCalledWith(
-				expect.objectContaining({
-					data: expect.objectContaining({ status: 'not_found' }),
-				}),
-			);
-		});
-
-		it('should successfully process a request and trigger search', async () => {
-			vi.mocked(prisma.bookRequest.findUnique).mockResolvedValue(mockRequest as any);
-			vi.mocked(getInstanceById).mockReturnValue(mockInstance);
-
-			vi.mocked(mockClient.searchBooks).mockResolvedValue([
-				{
-					id: 123,
-					title: 'The Martian',
-					foreignBookId: 'book-foreign-123',
-					author: {
-						authorName: 'Andy Weir',
-						foreignAuthorId: 'author-foreign-456',
-					},
-				} as any,
-			]);
-
-			vi.mocked(mockClient.getQualityProfiles).mockResolvedValue([{ id: 1, name: 'Any' }]);
-			vi.mocked(mockClient.getMetadataProfiles).mockResolvedValue([{ id: 1, name: 'Standard' }]);
-			vi.mocked(mockClient.getRootFolders).mockResolvedValue([
-				{ id: 1, path: '/books', accessible: true, freeSpace: 1000000 },
-			]);
-
-			vi.mocked(mockClient.addAndSearchBook).mockResolvedValue({
-				author: { id: 1 } as any,
-				book: { id: 123 } as any,
-				commandId: 456,
-			});
-
-			const result = await processor.processRequest('request-1');
-
-			expect(result.success).toBe(true);
-			expect(result.status).toBe('searching');
-			expect(result.externalId).toBe('123');
-
-			expect(mockClient.searchBooks).toHaveBeenCalledWith('The Martian Andy Weir');
-			expect(mockClient.addAndSearchBook).toHaveBeenCalledWith(
-				'book-foreign-123',
-				'author-foreign-456',
-				'Andy Weir',
-				1,
-				1,
-				'/books',
-				null, // isbn
-			);
-
-			expect(prisma.bookRequest.update).toHaveBeenCalledWith(
-				expect.objectContaining({
-					data: expect.objectContaining({
-						status: 'searching',
-						externalId: '123',
-					}),
-				}),
-			);
-		});
-
-		it('should handle Readarr API errors gracefully', async () => {
-			vi.mocked(prisma.bookRequest.findUnique).mockResolvedValue(mockRequest as any);
-			vi.mocked(getInstanceById).mockReturnValue(mockInstance);
-			vi.mocked(mockClient.searchBooks).mockRejectedValue(new Error('Connection refused'));
-
-			const result = await processor.processRequest('request-1');
-
-			expect(result.success).toBe(false);
-			expect(result.status).toBe('error');
-			expect(result.errorMessage).toBe('Connection refused');
-
-			expect(prisma.bookRequest.update).toHaveBeenCalledWith(
-				expect.objectContaining({
-					data: expect.objectContaining({
-						status: 'error',
-						errorMessage: 'Connection refused',
-					}),
-				}),
-			);
-		});
-
-		it('should return error if Readarr not configured properly', async () => {
-			vi.mocked(prisma.bookRequest.findUnique).mockResolvedValue(mockRequest as any);
-			vi.mocked(getInstanceById).mockReturnValue(mockInstance);
-
-			vi.mocked(mockClient.searchBooks).mockResolvedValue([
-				{
-					id: 123,
-					title: 'The Martian',
-					foreignBookId: 'book-foreign-123',
-				} as any,
-			]);
-
-			vi.mocked(mockClient.getQualityProfiles).mockResolvedValue([]);
-			vi.mocked(mockClient.getMetadataProfiles).mockResolvedValue([]);
-			vi.mocked(mockClient.getRootFolders).mockResolvedValue([]);
-
-			const result = await processor.processRequest('request-1');
-
-			expect(result.success).toBe(false);
-			expect(result.status).toBe('error');
-			expect(result.errorMessage).toContain('not properly configured');
-		});
-
-		it('should search for author when book result has no foreignAuthorId', async () => {
-			vi.mocked(prisma.bookRequest.findUnique).mockResolvedValue(mockRequest as any);
-			vi.mocked(getInstanceById).mockReturnValue(mockInstance);
-
-			// Book search returns result without author foreignAuthorId
-			vi.mocked(mockClient.searchBooks).mockResolvedValue([
-				{
-					id: 123,
-					title: 'The Martian',
-					foreignBookId: 'book-foreign-123',
-					author: {
-						authorName: 'Andy Weir',
-						foreignAuthorId: '', // Empty!
-					},
-				} as any,
-			]);
-
-			// Author search finds the author with foreignAuthorId
-			vi.mocked(mockClient.searchAuthors).mockResolvedValue([
-				{
-					id: 456,
-					authorName: 'Andy Weir',
-					foreignAuthorId: 'author-foreign-789',
-				} as any,
-			]);
-
-			vi.mocked(mockClient.getQualityProfiles).mockResolvedValue([{ id: 1, name: 'Any' }]);
-			vi.mocked(mockClient.getMetadataProfiles).mockResolvedValue([{ id: 1, name: 'Standard' }]);
-			vi.mocked(mockClient.getRootFolders).mockResolvedValue([
-				{ id: 1, path: '/books', accessible: true, freeSpace: 1000000 },
-			]);
-
-			vi.mocked(mockClient.addAndSearchBook).mockResolvedValue({
-				author: { id: 456 } as any,
-				book: { id: 123 } as any,
-				commandId: 789,
-			});
-
-			const result = await processor.processRequest('request-1');
-
-			expect(result.success).toBe(true);
-			expect(result.status).toBe('searching');
-
-			// Should have searched for the author
-			expect(mockClient.searchAuthors).toHaveBeenCalledWith('Andy Weir');
-
-			// Should have used the found author's foreignAuthorId
-			expect(mockClient.addAndSearchBook).toHaveBeenCalledWith(
-				'book-foreign-123',
-				'author-foreign-789',
-				'Andy Weir',
-				1,
-				1,
-				'/books',
-				null, // isbn
-			);
-		});
-
-		it('should return error when author foreignAuthorId is missing and author search fails', async () => {
-			vi.mocked(prisma.bookRequest.findUnique).mockResolvedValue(mockRequest as any);
-			vi.mocked(getInstanceById).mockReturnValue(mockInstance);
-
-			// Book search returns result without author foreignAuthorId
-			vi.mocked(mockClient.searchBooks).mockResolvedValue([
-				{
-					id: 123,
-					title: 'The Martian',
-					foreignBookId: 'book-foreign-123',
-					author: {
-						authorName: 'Andy Weir',
-						// No foreignAuthorId at all
-					},
-				} as any,
-			]);
-
-			// Author search returns no results
-			vi.mocked(mockClient.searchAuthors).mockResolvedValue([]);
-
-			vi.mocked(mockClient.getQualityProfiles).mockResolvedValue([{ id: 1, name: 'Any' }]);
-			vi.mocked(mockClient.getMetadataProfiles).mockResolvedValue([{ id: 1, name: 'Standard' }]);
-			vi.mocked(mockClient.getRootFolders).mockResolvedValue([
-				{ id: 1, path: '/books', accessible: true, freeSpace: 1000000 },
-			]);
-
-			const result = await processor.processRequest('request-1');
-
-			expect(result.success).toBe(false);
-			expect(result.status).toBe('error');
-			expect(result.errorMessage).toContain('Could not find author');
-		});
-
-		it('should extract author from authorTitle when author object is missing', async () => {
-			vi.mocked(prisma.bookRequest.findUnique).mockResolvedValue(mockRequest as any);
-			vi.mocked(getInstanceById).mockReturnValue(mockInstance);
-
-			// Book search returns result with authorTitle but no author object
-			vi.mocked(mockClient.searchBooks).mockResolvedValue([
-				{
-					id: 123,
-					title: 'The Martian',
-					foreignBookId: 'book-foreign-123',
-					authorTitle: 'Andy Weir - The Martian', // Combined author-title format
-					// No author object!
-				} as any,
-			]);
-
-			// Author search finds the author
-			vi.mocked(mockClient.searchAuthors).mockResolvedValue([
-				{
-					id: 456,
-					authorName: 'Andy Weir',
-					foreignAuthorId: 'author-foreign-789',
-				} as any,
-			]);
-
-			vi.mocked(mockClient.getQualityProfiles).mockResolvedValue([{ id: 1, name: 'Any' }]);
-			vi.mocked(mockClient.getMetadataProfiles).mockResolvedValue([{ id: 1, name: 'Standard' }]);
-			vi.mocked(mockClient.getRootFolders).mockResolvedValue([
-				{ id: 1, path: '/books', accessible: true, freeSpace: 1000000 },
-			]);
-
-			vi.mocked(mockClient.addAndSearchBook).mockResolvedValue({
-				author: { id: 456 } as any,
-				book: { id: 123 } as any,
-				commandId: 789,
-			});
-
-			const result = await processor.processRequest('request-1');
-
-			expect(result.success).toBe(true);
-			expect(result.status).toBe('searching');
-
-			// Should have searched for just "Andy Weir", extracted from authorTitle
-			expect(mockClient.searchAuthors).toHaveBeenCalledWith('Andy Weir');
-
-			// Should have used the found author's foreignAuthorId
-			expect(mockClient.addAndSearchBook).toHaveBeenCalledWith(
-				'book-foreign-123',
-				'author-foreign-789',
-				'Andy Weir',
-				1,
-				1,
-				'/books',
-				null, // isbn
-			);
-		});
-
-		it('should use partial matching when searching for author', async () => {
-			vi.mocked(prisma.bookRequest.findUnique).mockResolvedValue(mockRequest as any);
-			vi.mocked(getInstanceById).mockReturnValue(mockInstance);
-
-			// Book search returns result without author info
-			vi.mocked(mockClient.searchBooks).mockResolvedValue([
-				{
-					id: 123,
-					title: 'The Martian',
-					foreignBookId: 'book-foreign-123',
-					// No author or authorTitle
-				} as any,
-			]);
-
-			// Author search returns author with name containing our search term
-			// (e.g., Readarr has "Andy Weir (Author)" which contains "Andy Weir")
-			vi.mocked(mockClient.searchAuthors).mockResolvedValue([
-				{
-					id: 456,
-					authorName: 'Andy Weir (Author)', // Contains our search term "Andy Weir"
-					foreignAuthorId: 'author-foreign-789',
-				} as any,
-			]);
-
-			vi.mocked(mockClient.getQualityProfiles).mockResolvedValue([{ id: 1, name: 'Any' }]);
-			vi.mocked(mockClient.getMetadataProfiles).mockResolvedValue([{ id: 1, name: 'Standard' }]);
-			vi.mocked(mockClient.getRootFolders).mockResolvedValue([
-				{ id: 1, path: '/books', accessible: true, freeSpace: 1000000 },
-			]);
-
-			vi.mocked(mockClient.addAndSearchBook).mockResolvedValue({
-				author: { id: 456 } as any,
-				book: { id: 123 } as any,
-				commandId: 789,
-			});
-
-			const result = await processor.processRequest('request-1');
-
-			expect(result.success).toBe(true);
-			expect(result.status).toBe('searching');
-
-			// Should use the canonical name from Readarr, not our database
-			expect(mockClient.addAndSearchBook).toHaveBeenCalledWith(
-				'book-foreign-123',
-				'author-foreign-789',
-				'Andy Weir (Author)',
-				1,
-				1,
-				'/books',
-				null, // isbn
-			);
-		});
+	it('records an error when the instance is unknown or disabled', async () => {
+		vi.mocked(prisma.bookRequest.findUnique).mockResolvedValue(makeRequest() as never);
+		vi.mocked(getInstanceById).mockReturnValue({ ...instance, enabled: false });
+		const result = await processor.processRequest('request-1');
+		expect(result.status).toBe('error');
+		expect(result.errorMessage).toContain('disabled');
+		expect(lastUpdate()).toMatchObject({ status: 'error', phase: 'add' });
 	});
 
-	describe('findBestMatch', () => {
-		it('should prefer exact title match', async () => {
-			vi.mocked(prisma.bookRequest.findUnique).mockResolvedValue(mockRequest as any);
-			vi.mocked(getInstanceById).mockReturnValue(mockInstance);
+	it('links to a book that is already in Readarr instead of adding it again', async () => {
+		vi.mocked(prisma.bookRequest.findUnique).mockResolvedValue(
+			makeRequest({ ...baseBook, metadataId: 'work-1', metadataProvider: 'rreading-glasses' }) as never,
+		);
+		client.getBooks.mockResolvedValue([readarrBook({ monitored: false })]);
 
-			vi.mocked(mockClient.searchBooks).mockResolvedValue([
-				{
-					id: 1,
-					title: 'The Martian Chronicles',
-					foreignBookId: 'wrong',
-					author: { authorName: 'Ray Bradbury', foreignAuthorId: 'author-bradbury' },
-				} as any,
-				{
-					id: 2,
-					title: 'The Martian',
-					foreignBookId: 'correct',
-					author: { authorName: 'Andy Weir', foreignAuthorId: 'author-weir' },
-				} as any,
-			]);
+		const result = await processor.processRequest('request-1');
 
-			vi.mocked(mockClient.getQualityProfiles).mockResolvedValue([{ id: 1, name: 'Any' }]);
-			vi.mocked(mockClient.getMetadataProfiles).mockResolvedValue([{ id: 1, name: 'Standard' }]);
-			vi.mocked(mockClient.getRootFolders).mockResolvedValue([
-				{ id: 1, path: '/books', accessible: true, freeSpace: 1000000 },
-			]);
-			vi.mocked(mockClient.addAndSearchBook).mockResolvedValue({
-				author: { id: 1 } as any,
-				book: { id: 2 } as any,
-				commandId: 456,
-			});
-
-			await processor.processRequest('request-1');
-
-			expect(mockClient.addAndSearchBook).toHaveBeenCalledWith(
-				'correct',
-				'author-weir',
-				'Andy Weir',
-				1,
-				1,
-				'/books',
-				null, // isbn
-			);
-		});
+		expect(result).toMatchObject({ success: true, status: 'searching', externalId: '42' });
+		expect(client.updateBook).toHaveBeenCalledWith(expect.objectContaining({ id: 42, monitored: true }));
+		expect(client.searchBook).toHaveBeenCalledWith([42]);
+		expect(client.addAndSearchBook).not.toHaveBeenCalled();
+		expect(lastUpdate()).toMatchObject({ status: 'searching', phase: 'search', externalId: '42' });
 	});
 
-	describe('processBookRequests', () => {
-		it('should process all pending requests for a book', async () => {
-			vi.mocked(prisma.bookRequest.findMany).mockResolvedValue([
-				{ ...mockRequest, id: 'req-1', instanceId: 'fiction-audio' },
-				{ ...mockRequest, id: 'req-2', instanceId: 'fiction-ebook' },
-			] as any);
+	it('prefers the search result whose work id matches the metadata id', async () => {
+		vi.mocked(prisma.bookRequest.findUnique).mockResolvedValue(
+			makeRequest({ ...baseBook, metadataId: '123', metadataProvider: 'rreading-glasses' }) as never,
+		);
+		client.searchBooks.mockResolvedValue([
+			readarrBook({ foreignBookId: '999', title: 'The Martian' }),
+			readarrBook({ foreignBookId: '123', title: 'The Martian (Classroom Edition)' }),
+		]);
+		client.addAndSearchBook.mockResolvedValue({ book: { id: 77, titleSlug: 'x' }, author: {}, commandId: 1 });
 
-			// Mock for each processRequest call
-			vi.mocked(prisma.bookRequest.findUnique)
-				.mockResolvedValueOnce({ ...mockRequest, id: 'req-1' } as any)
-				.mockResolvedValueOnce({ ...mockRequest, id: 'req-2' } as any);
+		const result = await processor.processRequest('request-1');
 
-			vi.mocked(getInstanceById).mockReturnValue(mockInstance);
-			vi.mocked(mockClient.searchBooks).mockResolvedValue([]);
-
-			const results = await processor.processBookRequests('book-1');
-
-			expect(results.size).toBe(2);
-			expect(results.get('fiction-audio')).toBeDefined();
-			expect(results.get('fiction-ebook')).toBeDefined();
-		});
+		expect(client.searchBooks).toHaveBeenCalledWith('work:123');
+		expect(client.addAndSearchBook.mock.calls[0][0]).toBe('123');
+		expect(result).toMatchObject({ success: true, externalId: '77' });
 	});
 
-	describe('processAllPendingRequests', () => {
-		it('should process all pending requests and return counts', async () => {
-			vi.mocked(prisma.bookRequest.findMany).mockResolvedValue([
-				{ ...mockRequest, id: 'req-1' },
-				{ ...mockRequest, id: 'req-2' },
-				{ ...mockRequest, id: 'req-3' },
-			] as any);
+	it('does not add an unrelated book when nothing matches', async () => {
+		vi.mocked(prisma.bookRequest.findUnique).mockResolvedValue(makeRequest() as never);
+		client.searchBooks.mockResolvedValue([readarrBook({ title: 'Project Hail Mary', foreignBookId: 'other' })]);
 
-			vi.mocked(prisma.bookRequest.findUnique).mockResolvedValue(mockRequest as any);
-			vi.mocked(getInstanceById).mockReturnValue(mockInstance);
-			vi.mocked(mockClient.searchBooks).mockResolvedValue([]);
+		const result = await processor.processRequest('request-1');
 
-			const result = await processor.processAllPendingRequests();
+		expect(result.status).toBe('error');
+		expect(result.errorMessage).toContain("didn't return a match");
+		expect(client.addAndSearchBook).not.toHaveBeenCalled();
+	});
 
-			expect(result.processed).toBe(3);
-			expect(result.errors).toBe(0);
+	it('looks up the author when the search result has no author id', async () => {
+		vi.mocked(prisma.bookRequest.findUnique).mockResolvedValue(makeRequest() as never);
+		client.searchBooks.mockResolvedValue([readarrBook({ author: undefined })]);
+		client.searchAuthors.mockResolvedValue([{ authorName: 'Andy Weir', foreignAuthorId: 'author-weir' }]);
+		client.addAndSearchBook.mockResolvedValue({ book: { id: 5, titleSlug: 's' }, author: {}, commandId: 1 });
+
+		const result = await processor.processRequest('request-1');
+
+		expect(client.searchAuthors).toHaveBeenCalledWith('Andy Weir');
+		expect(client.addAndSearchBook.mock.calls[0][1]).toBe('author-weir');
+		expect(result.success).toBe(true);
+	});
+
+	it('explains a timeout and says the next check may still find it', async () => {
+		vi.mocked(prisma.bookRequest.findUnique).mockResolvedValue(makeRequest() as never);
+		client.searchBooks.mockResolvedValue([readarrBook()]);
+		client.addAndSearchBook.mockRejectedValue(
+			new ReadarrTimeoutError("Readarr didn't answer within 180s (POST /api/v1/author)"),
+		);
+
+		const result = await processor.processRequest('request-1');
+
+		expect(result.status).toBe('error');
+		expect(result.errorMessage).toContain('next check will pick it up');
+		expect(lastUpdate()).toMatchObject({ status: 'error', phase: 'add' });
+		expect(prisma.requestEvent.create).toHaveBeenCalledWith(
+			expect.objectContaining({ data: expect.objectContaining({ level: 'error', phase: 'add' }) }),
+		);
+	});
+
+	it('marks the request as adding before talking to Readarr', async () => {
+		vi.mocked(prisma.bookRequest.findUnique).mockResolvedValue(makeRequest() as never);
+		await processor.processRequest('request-1');
+		expect(vi.mocked(prisma.bookRequest.update).mock.calls[0][0].data).toMatchObject({
+			status: 'adding',
+			phase: 'add',
 		});
+	});
+});
 
-		it('should count errors correctly', async () => {
-			vi.mocked(prisma.bookRequest.findMany).mockResolvedValue([
-				{ ...mockRequest, id: 'req-1' },
-				{ ...mockRequest, id: 'req-2' },
-			] as any);
-
-			vi.mocked(prisma.bookRequest.findUnique)
-				.mockResolvedValueOnce(mockRequest as any)
-				.mockResolvedValueOnce(null); // Second request not found = error
-
-			vi.mocked(getInstanceById).mockReturnValue(mockInstance);
-			vi.mocked(mockClient.searchBooks).mockResolvedValue([]);
-
-			const result = await processor.processAllPendingRequests();
-
-			expect(result.processed).toBe(2);
-			expect(result.errors).toBe(1);
+describe('RequestProcessor matching', () => {
+	it('never matches an omnibus or a namesake by another author', async () => {
+		const processor = new RequestProcessor({ createClient: () => ({}) as ReadarrClient });
+		const match = (
+			processor as unknown as {
+				findBestMatch: (r: ReadarrBook[], t: string, a: string, m?: string | null) => ReadarrBook | null;
+			}
+		).findBestMatch.bind(processor);
+		const omnibus = readarrBook({ title: 'Project Hail Mary / Artemis/ The Martian' });
+		const namesake = readarrBook({
+			title: 'Piranesi',
+			author: { authorName: 'Nicholas Penny' } as ReadarrBook['author'],
 		});
+		const right = readarrBook({
+			title: 'Piranesi: A Novel',
+			author: { authorName: 'Susanna Clarke' } as ReadarrBook['author'],
+		});
+		expect(match([omnibus], 'The Martian', 'Andy Weir')).toBeNull();
+		expect(match([namesake, right], 'Piranesi', 'Susanna Clarke')).toBe(right);
 	});
 });

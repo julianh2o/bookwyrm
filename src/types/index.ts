@@ -5,6 +5,8 @@ export type { User };
 export type {
 	BookCategory,
 	BookRequestStatus,
+	BookRequestPhase,
+	RequestEvent,
 	CreateBookInput,
 	UpdateBookInput,
 	BookResponse,

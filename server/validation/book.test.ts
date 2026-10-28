@@ -78,7 +78,10 @@ describe('createBookSchema', () => {
 	it('should reject missing required fields', () => {
 		expect(() => createBookSchema.parse({})).toThrow();
 		expect(() => createBookSchema.parse({ title: 'Test' })).toThrow();
-		expect(() => createBookSchema.parse({ title: 'Test', author: 'Author' })).toThrow();
+	});
+
+	it('should allow omitting category (the API guesses it from genres)', () => {
+		expect(createBookSchema.parse({ title: 'Test', author: 'Author' }).category).toBeUndefined();
 	});
 
 	it('should reject empty title', () => {
@@ -173,7 +176,7 @@ describe('listBooksQuerySchema', () => {
 
 	it('should reject limit outside valid range', () => {
 		expect(() => listBooksQuerySchema.parse({ limit: 0 })).toThrow();
-		expect(() => listBooksQuerySchema.parse({ limit: 101 })).toThrow();
+		expect(() => listBooksQuerySchema.parse({ limit: 1001 })).toThrow();
 	});
 
 	it('should reject negative offset', () => {

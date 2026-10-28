@@ -1,5 +1,47 @@
 # Architecture
 
+## BookWyrm in one paragraph
+
+BookWyrm keeps one list of every book across the four Readarr instances (fiction/nonfiction × audio/ebook).
+Each `Book` has one `BookRequest` per instance, and each request moves through
+`add → search → download → import → available`. The UI shows one badge per instance: hover for the phase,
+the last error and recent history (`RequestEvent`), click to retry just that phase.
+
+### Background checker (`server/services/tracker/`)
+- `LibraryTracker` polls every instance every `POLL_INTERVAL_MS` (default 5 min) and right after any add/retry.
+  Per instance it reads `/book`, `/author`, `/queue` and the grab history (`/history?eventType=1`).
+- It imports books Readarr has that BookWyrm doesn't (monitored or downloaded only; the unmonitored author
+  backlog is skipped), matching across instances by `foreignBookId`, then normalized title + overlapping author.
+- Queue items Readarr couldn't match (`bookId: null`) are tied to a book through the grab history's
+  `downloadId`. Items with no grab in that instance are counted as `foreignQueueItems` in `/api/sync/status`
+  (usually another instance's downloads sharing a download-client category).
+- `state.ts#computeState` is the pure mapping from Readarr data to `{status, phase, errorMessage, progress}`.
+- `actions.ts`: the add queue (one add at a time per instance, run in the background) and `retryRequest`:
+  - add: run the whole add again
+  - search: monitor (if needed) and trigger `BookSearch`
+  - download: remove the queue item from the client, blocklist it, search again
+  - import: `ManualImport` the downloaded files as the grabbed book (ignoring "couldn't find similar book"
+    rejections); if nothing is importable, drop the queue row (keeping files) and search again
+- Set `DISABLE_POLLER=true` to turn the checker off.
+
+### Request statuses
+`pending` (queued) · `adding` · `searching` (just searched) · `wanted` (monitored, nothing grabbed yet) ·
+`downloading` · `importing` · `available` · `error` (with `phase` saying where it failed).
+
+### API additions
+- `POST /api/books`: `category` optional when `metadataId` is given (guessed from genres); `instanceIds`
+  defaults to audio + ebook for the category; `autoRequest` (default true) sends it to Readarr in the background.
+  Re-adding a tracked book returns it with `existing: true` (200) and only adds missing instances.
+- `GET /api/books?status=&search=&category=&sort=recent|activity|title|author`
+- `POST /api/books/requests/:id/retry`, `GET /api/books/requests/:id/events`
+- `POST /api/sync/library` (check all instances now), `GET /api/sync/status` (health + counts)
+- `GET /api/metadata/book/:id` includes `suggestedCategory`
+
+### Tests
+Server tests run against `data/test.db` and `server/test-fixtures/readarr.json` (set in `server/test-setup.ts`),
+never the real DB or real Readarr. `client.integration.test.ts` only runs with `READARR_INTEGRATION=1`.
+Note: `yarn dev:server` runs `prisma migrate dev`; production runs `prisma migrate deploy` on container start.
+
 ## Overview
 
 This is a minimal application template built with a React/TypeScript frontend and Express backend. It provides a basic foundation for building web applications with modern tooling.

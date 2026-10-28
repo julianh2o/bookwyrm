@@ -40,10 +40,33 @@ model BookRequest {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
   lastChecked DateTime?
+  phase        String   @default("add") // add, search, download, import, available
+  progress     Float?   // 0..1 while downloading
+  queueId      Int?     // Readarr queue record id (download/import phases)
+  downloadId   String?  // Download client id of the active grab
+  outputPath   String?  // Where the download landed (import phase)
+  attempts     Int      @default(0)
+  lastSearchAt DateTime?
+  lastErrorAt  DateTime?
 
   book        Book     @relation(fields: [bookId], references: [id], onDelete: Cascade)
+  events      RequestEvent[]
 
   @@unique([bookId, instanceId])
   @@index([status])
   @@index([instanceId])
+}
+
+/// History of what happened to a request (shown in the badge hover)
+model RequestEvent {
+  id        String   @id @default(cuid())
+  requestId String
+  phase     String
+  level     String   // info, warn, error
+  message   String
+  createdAt DateTime @default(now())
+
+  request   BookRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  @@index([requestId, createdAt])
 }

@@ -43,14 +43,14 @@ ARG BUILD_DATE
 ARG VCS_REF
 
 # OCI standard labels
-LABEL org.opencontainers.image.title="TEMPLATE_REPLACEME"
-LABEL org.opencontainers.image.description="Event management application with form-driven workflows and automated SMS reminders"
+LABEL org.opencontainers.image.title="bookwyrm"
+LABEL org.opencontainers.image.description="One list of every book across Julian's Readarr instances, with per-format status tracking"
 LABEL org.opencontainers.image.version="${VERSION}"
 LABEL org.opencontainers.image.created="${BUILD_DATE}"
 LABEL org.opencontainers.image.revision="${VCS_REF}"
 LABEL org.opencontainers.image.authors="Julian Hartline <https://www.julianhartline.com>"
-LABEL org.opencontainers.image.url="https://hub.docker.com/repository/docker/julianh2o/TEMPLATE_REPLACEME"
-LABEL org.opencontainers.image.source="https://github.com/julianh2o/TEMPLATE_REPLACEME"
+LABEL org.opencontainers.image.url="https://hub.docker.com/repository/docker/julianh2o/bookwyrm"
+LABEL org.opencontainers.image.source="https://github.com/julianh2o/bookwyrm"
 
 # Install OpenSSL for Prisma
 RUN apt-get update -y && apt-get install -y openssl && rm -rf /var/lib/apt/lists/*

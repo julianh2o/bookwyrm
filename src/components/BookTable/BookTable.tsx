@@ -12,20 +12,20 @@ import {
 	Box,
 	CircularProgress,
 } from '@mui/material';
-import { PlayArrow as RequestIcon, Sync as SyncIcon, Delete as DeleteIcon } from '@mui/icons-material';
+import { Sync as SyncIcon, Delete as DeleteIcon } from '@mui/icons-material';
 import type { BookWithRequests, ReadarrInstance, BookRequestResponse } from '../../types';
 import { EditableCell } from './EditableCell';
 import { StatusChip } from './StatusChip';
-import { InstanceCheckboxes } from '../InstanceCheckboxes';
+import { RequestBadge } from '../RequestBadge';
 
 interface BookTableProps {
 	books: BookWithRequests[];
 	instances: ReadarrInstance[];
 	onUpdateBook: (id: string, updates: { title?: string; author?: string }) => Promise<void>;
 	onDeleteBook: (id: string) => Promise<void>;
-	onProcessRequests: (id: string) => Promise<void>;
 	onSyncStatus: (id: string) => Promise<void>;
 	onAddToInstance: (bookId: string, instanceId: string) => Promise<void>;
+	onRetryRequest: (request: BookRequestResponse) => Promise<void>;
 	loading?: boolean;
 }
 
@@ -34,12 +34,11 @@ export function BookTable({
 	instances,
 	onUpdateBook,
 	onDeleteBook,
-	onProcessRequests,
 	onSyncStatus,
 	onAddToInstance,
+	onRetryRequest,
 	loading = false,
 }: BookTableProps) {
-	const [processingIds, setProcessingIds] = useState<Set<string>>(new Set());
 	const [syncingIds, setSyncingIds] = useState<Set<string>>(new Set());
 	const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set());
 	// Track which book+instance combo is being added
@@ -51,19 +50,6 @@ export function BookTable({
 
 	const handleAuthorSave = async (bookId: string, author: string) => {
 		await onUpdateBook(bookId, { author });
-	};
-
-	const handleProcessRequests = async (bookId: string) => {
-		setProcessingIds((prev) => new Set(prev).add(bookId));
-		try {
-			await onProcessRequests(bookId);
-		} finally {
-			setProcessingIds((prev) => {
-				const next = new Set(prev);
-				next.delete(bookId);
-				return next;
-			});
-		}
 	};
 
 	const handleSyncStatus = async (bookId: string) => {
@@ -92,33 +78,10 @@ export function BookTable({
 		}
 	};
 
-	const handleAddToInstance = async (bookId: string, instanceId: string) => {
-		setAddingInstance({ bookId, instanceId });
-		try {
-			await onAddToInstance(bookId, instanceId);
-		} finally {
-			setAddingInstance(null);
-		}
-	};
-
-	const getRequestStatusMap = (requests: BookRequestResponse[]): Record<string, BookRequestResponse> => {
-		const map: Record<string, BookRequestResponse> = {};
-		for (const req of requests) {
-			map[req.instanceId] = req;
-		}
-		return map;
-	};
-
-	const getSelectedInstanceIds = (requests: BookRequestResponse[]): string[] => {
-		return requests.map((r) => r.instanceId);
-	};
-
-	const hasPendingRequests = (requests: BookRequestResponse[]): boolean => {
-		return requests.some((r) => r.status === 'pending');
-	};
-
-	const hasInProgressRequests = (requests: BookRequestResponse[]): boolean => {
-		return requests.some((r) => r.status === 'searching' || r.status === 'downloading');
+	/** Badges for the book's category, plus any other instance it was requested from */
+	const instancesFor = (book: BookWithRequests): ReadarrInstance[] => {
+		const requested = new Set(book.requests.map((r) => r.instanceId));
+		return instances.filter((i) => i.category === book.category || requested.has(i.id));
 	};
 
 	if (loading) {
@@ -136,7 +99,7 @@ export function BookTable({
 					<TableRow>
 						<TableCell sx={{ fontWeight: 600, width: '30%' }}>Title</TableCell>
 						<TableCell sx={{ fontWeight: 600, width: '25%' }}>Author</TableCell>
-						<TableCell sx={{ fontWeight: 600, width: '200px' }}>Instances</TableCell>
+						<TableCell sx={{ fontWeight: 600, width: '220px' }}>Formats</TableCell>
 						<TableCell sx={{ fontWeight: 600, width: '100px' }}>Status</TableCell>
 						<TableCell sx={{ fontWeight: 600, width: '120px' }} align='right'>
 							Actions
@@ -152,10 +115,9 @@ export function BookTable({
 						</TableRow>
 					) : (
 						books.map((book) => {
-							const isProcessing = processingIds.has(book.id);
 							const isSyncing = syncingIds.has(book.id);
 							const isDeleting = deletingIds.has(book.id);
-							const isBusy = isProcessing || isSyncing || isDeleting;
+							const isBusy = isSyncing || isDeleting;
 
 							return (
 								<TableRow
@@ -165,12 +127,29 @@ export function BookTable({
 										opacity: isDeleting ? 0.5 : 1,
 									}}>
 									<TableCell>
-										<EditableCell
-											value={book.title}
-											onSave={(title) => handleTitleSave(book.id, title)}
-											placeholder='Enter title'
-											disabled={isBusy}
-										/>
+										<Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+											{book.coverUrl ? (
+												<Box
+													component='img'
+													src={book.coverUrl}
+													alt=''
+													loading='lazy'
+													sx={{ width: 28, height: 42, objectFit: 'cover', borderRadius: 0.5, flexShrink: 0 }}
+												/>
+											) : (
+												<Box
+													sx={{ width: 28, height: 42, borderRadius: 0.5, bgcolor: 'action.hover', flexShrink: 0 }}
+												/>
+											)}
+											<Box sx={{ flex: 1, minWidth: 0 }}>
+												<EditableCell
+													value={book.title}
+													onSave={(title) => handleTitleSave(book.id, title)}
+													placeholder='Enter title'
+													disabled={isBusy}
+												/>
+											</Box>
+										</Box>
 									</TableCell>
 									<TableCell>
 										<EditableCell
@@ -181,37 +160,29 @@ export function BookTable({
 										/>
 									</TableCell>
 									<TableCell>
-										<InstanceCheckboxes
-											instances={instances.filter((i) => i.category === book.category)}
-											selectedIds={getSelectedInstanceIds(book.requests)}
-											requestStatus={getRequestStatusMap(book.requests)}
-											onAdd={(instanceId) => handleAddToInstance(book.id, instanceId)}
-											loading={isProcessing}
-											processingInstanceId={addingInstance?.bookId === book.id ? addingInstance.instanceId : undefined}
-										/>
+										<Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
+											{instancesFor(book).map((instance) => (
+												<RequestBadge
+													key={instance.id}
+													instance={instance}
+													request={book.requests.find((r) => r.instanceId === instance.id)}
+													onRetry={onRetryRequest}
+													onAdd={(instanceId) => onAddToInstance(book.id, instanceId)}
+												/>
+											))}
+										</Box>
 									</TableCell>
 									<TableCell>
 										<StatusChip requests={book.requests} />
 									</TableCell>
 									<TableCell align='right'>
 										<Box sx={{ display: 'flex', gap: 0.5, justifyContent: 'flex-end' }}>
-											<Tooltip title='Process pending requests'>
-												<span>
-													<IconButton
-														size='small'
-														onClick={() => handleProcessRequests(book.id)}
-														disabled={isBusy || !hasPendingRequests(book.requests)}
-														color='primary'>
-														{isProcessing ? <CircularProgress size={18} /> : <RequestIcon fontSize='small' />}
-													</IconButton>
-												</span>
-											</Tooltip>
-											<Tooltip title='Sync status with Readarr'>
+											<Tooltip title='Check Readarr now'>
 												<span>
 													<IconButton
 														size='small'
 														onClick={() => handleSyncStatus(book.id)}
-														disabled={isBusy || !hasInProgressRequests(book.requests)}
+														disabled={isBusy || book.requests.length === 0}
 														color='info'>
 														{isSyncing ? <CircularProgress size={18} /> : <SyncIcon fontSize='small' />}
 													</IconButton>

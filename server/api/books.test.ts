@@ -1,8 +1,15 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import request from 'supertest';
 import express from 'express';
 import booksRouter from './books';
 import { prisma } from '../db';
+
+// Never send test books to Readarr
+vi.mock('../services/tracker/actions', () => ({
+	enqueueAdd: vi.fn(),
+	retryRequest: vi.fn(),
+	RetryError: class RetryError extends Error {},
+}));
 
 // Create test app
 const app = express();

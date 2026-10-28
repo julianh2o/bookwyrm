@@ -10,12 +10,16 @@ export const bookCategorySchema = z.enum(['fiction', 'nonfiction']);
  */
 export const bookRequestStatusSchema = z.enum([
 	'pending',
+	'adding',
 	'searching',
-	'found',
+	'wanted',
 	'downloading',
+	'importing',
 	'available',
-	'not_found',
 	'error',
+	// legacy values from before the phase model
+	'found',
+	'not_found',
 ]);
 
 /**
@@ -29,11 +33,16 @@ export const createBookSchema = z.object({
 		.regex(/^[\d\-X]+$/, 'Invalid ISBN format')
 		.optional()
 		.nullable(),
-	category: bookCategorySchema,
+	/** Optional when metadataId is given: guessed from the book's genres */
+	category: bookCategorySchema.optional(),
 	coverUrl: z.string().url('Invalid cover URL').optional().nullable(),
 	notes: z.string().max(5000).optional().nullable(),
 	metadataId: z.string().optional().nullable(),
 	metadataProvider: z.string().optional().nullable(),
+	/** Which Readarr instances to request. Defaults to every enabled instance for the category (audio + ebook). */
+	instanceIds: z.array(z.string()).optional(),
+	/** Send to Readarr right away (default true) */
+	autoRequest: z.boolean().optional(),
 });
 
 /**
@@ -101,7 +110,8 @@ export const listBooksQuerySchema = z.object({
 	category: bookCategorySchema.optional(),
 	status: bookRequestStatusSchema.optional(),
 	search: z.string().optional(),
-	limit: z.coerce.number().int().min(1).max(100).default(50),
+	sort: z.enum(['recent', 'title', 'author', 'activity']).default('recent'),
+	limit: z.coerce.number().int().min(1).max(1000).default(50),
 	offset: z.coerce.number().int().min(0).default(0),
 });
 

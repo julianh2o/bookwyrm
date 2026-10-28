@@ -178,3 +178,63 @@ export interface ReadarrRootFolder {
 	accessible: boolean;
 	freeSpace: number;
 }
+
+export interface ReadarrStatusMessage {
+	title: string;
+	messages: string[];
+}
+
+export interface ReadarrQueueItem {
+	id: number;
+	bookId?: number | null;
+	authorId?: number | null;
+	title: string;
+	size: number;
+	sizeleft: number;
+	status: string; // queued, downloading, paused, completed, failed, warning, delay...
+	trackedDownloadStatus?: string; // ok, warning, error
+	trackedDownloadState?: string; // downloading, importPending, importing, imported, importBlocked, importFailed, failedPending, failed
+	statusMessages?: ReadarrStatusMessage[];
+	errorMessage?: string | null;
+	downloadId?: string;
+	outputPath?: string;
+	downloadClient?: string;
+	estimatedCompletionTime?: string;
+	quality?: unknown;
+}
+
+export interface ReadarrPaged<T> {
+	page: number;
+	pageSize: number;
+	totalRecords: number;
+	records: T[];
+}
+
+export interface ReadarrHistoryItem {
+	id: number;
+	bookId: number;
+	authorId: number;
+	sourceTitle: string;
+	date: string;
+	downloadId?: string;
+	eventType: string; // grabbed, downloadFailed, bookFileImported, bookImportIncomplete, downloadImported, ...
+	data?: Record<string, string | null>;
+}
+
+export interface ReadarrManualImportItem {
+	id?: number;
+	path: string;
+	name?: string;
+	size?: number;
+	author?: { id: number } | null;
+	book?: { id: number } | null;
+	foreignEditionId?: string | null;
+	quality: unknown;
+	releaseGroup?: string | null;
+	downloadId?: string;
+	indexerFlags?: number;
+	additionalFile?: boolean;
+	replaceExistingFiles?: boolean;
+	disableReleaseSwitching?: boolean;
+	rejections: Array<{ reason: string; type: string }>;
+}

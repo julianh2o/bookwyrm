@@ -9,6 +9,7 @@ export {
 	processRequests,
 	syncStatus,
 	retryRequest,
+	getRequestEvents,
 	addToInstance,
 	createBookWithInstances,
 	getDefaultInstancesForCategory,
@@ -27,6 +28,9 @@ export { searchBooks, getBookMetadata, type MetadataSearchResult, type BookMetad
 export {
 	syncLibrary,
 	purgeLibrary,
+	getSyncStatus,
+	type InstanceHealth,
+	type SyncStatusSummary,
 	type LibrarySyncResponse,
 	type LibrarySyncResult,
 	type PurgeResponse,

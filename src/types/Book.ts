@@ -5,7 +5,21 @@
 
 export type BookCategory = 'fiction' | 'nonfiction';
 
-export type BookRequestStatus = 'pending' | 'searching' | 'found' | 'downloading' | 'available' | 'not_found' | 'error';
+export type BookRequestStatus =
+	| 'pending'
+	| 'adding'
+	| 'searching'
+	| 'wanted'
+	| 'downloading'
+	| 'importing'
+	| 'available'
+	| 'error'
+	// legacy, from before the phase model
+	| 'found'
+	| 'not_found';
+
+/** Where a request is in its life: add → search → download → import → available */
+export type BookRequestPhase = 'add' | 'search' | 'download' | 'import' | 'available';
 
 /**
  * Input for creating a new book
@@ -19,6 +33,10 @@ export interface CreateBookInput {
 	notes?: string | null;
 	metadataId?: string | null;
 	metadataProvider?: string | null;
+	/** Readarr instances to request; defaults to audio + ebook for the category */
+	instanceIds?: string[];
+	/** Send to Readarr right away (default true) */
+	autoRequest?: boolean;
 }
 
 /**
@@ -66,6 +84,20 @@ export interface BookRequestResponse {
 	createdAt: string;
 	updatedAt: string;
 	lastChecked: string | null;
+	phase: BookRequestPhase;
+	progress: number | null;
+	attempts: number;
+	lastSearchAt: string | null;
+	lastErrorAt: string | null;
+}
+
+export interface RequestEvent {
+	id: string;
+	requestId: string;
+	phase: BookRequestPhase;
+	level: 'info' | 'warn' | 'error';
+	message: string;
+	createdAt: string;
 }
 
 /**
@@ -82,6 +114,7 @@ export interface ListBooksQuery {
 	category?: BookCategory;
 	status?: BookRequestStatus;
 	search?: string;
+	sort?: 'recent' | 'title' | 'author' | 'activity';
 	limit?: number;
 	offset?: number;
 }

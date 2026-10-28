@@ -6,6 +6,7 @@ import type {
 	UpdateBookInput,
 	ListBooksQuery,
 	BookCategory,
+	RequestEvent,
 } from '../types';
 
 /**
@@ -13,7 +14,7 @@ import type {
  */
 export interface ProcessResult {
 	success: boolean;
-	status: 'searching' | 'not_found' | 'error';
+	status: 'searching' | 'error';
 	externalId?: string;
 	errorMessage?: string;
 }
@@ -51,7 +52,8 @@ export interface SyncStatusResponse {
  */
 export interface RetryRequestResponse {
 	book: BookWithRequests;
-	result: ProcessResult;
+	/** What the retry did: add, search, redownload or import */
+	action: string;
 }
 
 /**
@@ -59,7 +61,7 @@ export interface RetryRequestResponse {
  */
 export interface AddToInstanceResponse {
 	book: BookWithRequests;
-	result: ProcessResult;
+	requestId: string;
 }
 
 /**
@@ -71,6 +73,7 @@ function buildQueryString(params: ListBooksQuery): string {
 	if (params.category) searchParams.set('category', params.category);
 	if (params.status) searchParams.set('status', params.status);
 	if (params.search) searchParams.set('search', params.search);
+	if (params.sort) searchParams.set('sort', params.sort);
 	if (params.limit !== undefined) searchParams.set('limit', params.limit.toString());
 	if (params.offset !== undefined) searchParams.set('offset', params.offset.toString());
 
@@ -96,8 +99,16 @@ export async function getBook(id: string): Promise<BookWithRequests> {
 /**
  * Create a new book
  */
-export async function createBook(input: CreateBookInput): Promise<BookWithRequests> {
-	return post<BookWithRequests>('/api/books', input);
+export async function createBook(input: CreateBookInput): Promise<BookWithRequests & { existing?: boolean }> {
+	return post<BookWithRequests & { existing?: boolean }>('/api/books', input);
+}
+
+/**
+ * What happened to a request, newest first
+ */
+export async function getRequestEvents(requestId: string): Promise<RequestEvent[]> {
+	const response = await get<{ events: RequestEvent[] }>(`/api/books/requests/${requestId}/events`);
+	return response.events;
 }
 
 /**

@@ -32,6 +32,8 @@ export interface BookMetadata {
 		position?: number;
 	};
 	provider: string;
+	/** Fiction/nonfiction guess from the genres (null when there's nothing to go on) */
+	suggestedCategory?: { category: 'fiction' | 'nonfiction'; confident: boolean; reason: string } | null;
 }
 
 interface SearchResponse {

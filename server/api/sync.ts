@@ -1,5 +1,5 @@
 import { Router, Request, Response, NextFunction } from 'express';
-import { getLibrarySyncService } from '../services/library-sync';
+import { getTracker } from '../services/tracker';
 import { prisma } from '../db';
 
 const router = Router();
@@ -15,27 +15,36 @@ function asyncHandler(fn: (req: Request, res: Response, next: NextFunction) => P
 
 /**
  * POST /api/sync/library
- * Sync books from all enabled Readarr instances
+ * Check every Readarr instance now: import new books, update every request's status
  */
 router.post(
 	'/library',
 	asyncHandler(async (_req, res) => {
-		const service = getLibrarySyncService();
-		const results = await service.syncAll();
-
+		const results = await getTracker().pollAll();
 		const summary = {
 			totalInstances: results.length,
-			totalBooksFound: results.reduce((sum, r) => sum + r.booksFound, 0),
-			totalBooksImported: results.reduce((sum, r) => sum + r.booksImported, 0),
-			totalBooksSkipped: results.reduce((sum, r) => sum + r.booksSkipped, 0),
 			totalBooksCreated: results.reduce((sum, r) => sum + r.booksCreated, 0),
-			totalBooksUpdated: results.reduce((sum, r) => sum + r.booksUpdated, 0),
 			totalRequestsCreated: results.reduce((sum, r) => sum + r.requestsCreated, 0),
-			totalRequestsUpdated: results.reduce((sum, r) => sum + r.requestsUpdated, 0),
-			totalErrors: results.reduce((sum, r) => sum + r.errors.length, 0),
+			totalRequestsLinked: results.reduce((sum, r) => sum + r.requestsLinked, 0),
+			totalRequestsChanged: results.reduce((sum, r) => sum + r.requestsChanged, 0),
+			totalErrors: results.filter((r) => r.error).length,
 		};
+		res.json({ summary, results, health: getTracker().getHealth() });
+	}),
+);
 
-		res.json({ summary, results });
+/**
+ * GET /api/sync/status
+ * Per-instance health from the background checker
+ */
+router.get(
+	'/status',
+	asyncHandler(async (_req, res) => {
+		const counts = await prisma.bookRequest.groupBy({ by: ['instanceId', 'status'], _count: { _all: true } });
+		res.json({
+			instances: getTracker().getHealth(),
+			counts: counts.map((c) => ({ instanceId: c.instanceId, status: c.status, count: c._count._all })),
+		});
 	}),
 );
 

@@ -31,6 +31,9 @@ interface InstanceCheckboxesProps {
 
 const STATUS_ICONS: Record<BookRequestStatus, React.ReactNode> = {
 	pending: <PendingIcon fontSize='small' sx={{ color: 'text.secondary' }} />,
+	adding: <PendingIcon fontSize='small' sx={{ color: 'info.main' }} />,
+	wanted: <SearchingIcon fontSize='small' sx={{ color: 'warning.main' }} />,
+	importing: <DownloadingIcon fontSize='small' sx={{ color: 'info.main' }} />,
 	searching: <SearchingIcon fontSize='small' sx={{ color: 'info.main' }} />,
 	found: <SearchingIcon fontSize='small' sx={{ color: 'info.main' }} />,
 	downloading: <DownloadingIcon fontSize='small' sx={{ color: 'info.main' }} />,
@@ -41,6 +44,9 @@ const STATUS_ICONS: Record<BookRequestStatus, React.ReactNode> = {
 
 const STATUS_LABELS: Record<BookRequestStatus, string> = {
 	pending: 'Pending',
+	adding: 'Adding',
+	wanted: 'Wanted',
+	importing: 'Importing',
 	searching: 'Searching',
 	found: 'Found',
 	downloading: 'Downloading',

@@ -5,6 +5,8 @@ import { config } from './config';
 import { prisma } from './db';
 import apiRouter from './api';
 import { getBuildPath } from './utils/paths';
+import { getTracker } from './services/tracker';
+import { enqueueAdd } from './services/tracker/actions';
 
 const app = express();
 
@@ -47,6 +49,15 @@ if (
 		} catch (error) {
 			console.error('Failed to connect to database:', error);
 			process.exit(1);
+		}
+
+		// Background checker: keeps every request's badge current and imports books added in Readarr directly
+		if (process.env.DISABLE_POLLER !== 'true') {
+			const intervalMs = parseInt(process.env.POLL_INTERVAL_MS ?? '', 10) || 5 * 60 * 1000;
+			const tracker = getTracker();
+			tracker.setPendingHandler(enqueueAdd);
+			tracker.start(intervalMs);
+			console.log(`[Tracker] Polling Readarr every ${Math.round(intervalMs / 1000)}s`);
 		}
 	});
 } else {

@@ -1,6 +1,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { createRReadingGlassesProvider } from '../services/metadata';
 import type { SearchResult } from '../services/metadata';
+import { guessCategory } from '../services/metadata/category';
 
 const router = Router();
 
@@ -59,7 +60,7 @@ router.get(
 				return;
 			}
 
-			res.json(book);
+			res.json({ ...book, suggestedCategory: guessCategory(book.genres) });
 		} catch (error) {
 			console.error('Metadata fetch error:', error);
 			res.status(500).json({ error: 'Failed to fetch book details' });

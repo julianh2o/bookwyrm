@@ -3,50 +3,34 @@ import { prisma } from '../db';
 import { createBookSchema, updateBookSchema, listBooksQuerySchema } from '../validation';
 import { getInstancesFor, getInstanceById } from '../config/readarr';
 import { ZodError } from 'zod';
-import { RequestProcessor } from '../services/request-processor';
-import { StatusSyncService } from '../services/status-sync';
+import { createRReadingGlassesProvider } from '../services/metadata';
+import { guessCategory } from '../services/metadata/category';
+import { getTracker } from '../services/tracker';
+import { enqueueAdd, retryRequest, RetryError } from '../services/tracker/actions';
 
 const router = Router();
 
-/**
- * Helper to format Prisma dates to ISO strings
- */
-function formatBook(book: {
-	id: string;
-	title: string;
-	author: string;
-	isbn: string | null;
-	category: string;
-	coverUrl: string | null;
-	notes: string | null;
-	metadataId: string | null;
-	metadataProvider: string | null;
-	createdAt: Date;
-	updatedAt: Date;
-	requests?: Array<{
-		id: string;
-		bookId: string;
-		instanceId: string;
-		status: string;
-		externalId: string | null;
-		externalSlug: string | null;
-		errorMessage: string | null;
-		createdAt: Date;
-		updatedAt: Date;
-		lastChecked: Date | null;
-	}>;
-}) {
-	return {
-		...book,
-		createdAt: book.createdAt.toISOString(),
-		updatedAt: book.updatedAt.toISOString(),
-		requests: book.requests?.map((r) => ({
-			...r,
-			createdAt: r.createdAt.toISOString(),
-			updatedAt: r.updatedAt.toISOString(),
-			lastChecked: r.lastChecked?.toISOString() ?? null,
-		})),
-	};
+type Row = Record<string, unknown>;
+
+/** Dates → ISO strings, recursively for requests */
+function serialize<T extends Row>(row: T): Row {
+	const out: Row = {};
+	for (const [key, value] of Object.entries(row)) {
+		if (value instanceof Date) out[key] = value.toISOString();
+		else if (key === 'requests' && Array.isArray(value)) out[key] = value.map((r) => serialize(r as Row));
+		else out[key] = value;
+	}
+	return out;
+}
+
+function formatBook(book: Row) {
+	return serialize(book);
+}
+
+const withRequests = { requests: { orderBy: { instanceId: 'asc' as const } } };
+
+async function loadBook(id: string) {
+	return prisma.book.findUnique({ where: { id }, include: withRequests });
 }
 
 /**
@@ -81,25 +65,37 @@ router.get(
 			];
 		}
 
-		// If filtering by status, we need to filter after fetching
-		const books = await prisma.book.findMany({
+		if (query.status) {
+			where.requests = { some: { status: query.status } };
+		}
+
+		const orderBy =
+			query.sort === 'title'
+				? { title: 'asc' as const }
+				: query.sort === 'author'
+					? { author: 'asc' as const }
+					: query.sort === 'activity'
+						? { updatedAt: 'desc' as const }
+						: { createdAt: 'desc' as const };
+
+		let books = await prisma.book.findMany({
 			where,
-			include: { requests: true },
-			orderBy: { createdAt: 'desc' },
-			take: query.limit,
-			skip: query.offset,
+			include: withRequests,
+			orderBy,
+			take: query.sort === 'activity' ? undefined : query.limit,
+			skip: query.sort === 'activity' ? undefined : query.offset,
 		});
 
-		// Filter by request status if specified
-		let filteredBooks = books;
-		if (query.status) {
-			filteredBooks = books.filter((book) => book.requests.some((r) => r.status === query.status));
+		if (query.sort === 'activity') {
+			// Most recently changed request first (a book's own updatedAt doesn't move when its requests do)
+			const latest = (b: (typeof books)[number]) => Math.max(0, ...b.requests.map((r) => r.updatedAt.getTime()));
+			books = books.sort((a, b) => latest(b) - latest(a)).slice(query.offset, query.offset + query.limit);
 		}
 
 		const total = await prisma.book.count({ where });
 
 		res.json({
-			books: filteredBooks.map(formatBook),
+			books: books.map(formatBook),
 			total,
 			limit: query.limit,
 			offset: query.offset,
@@ -114,46 +110,72 @@ router.get(
 router.post(
 	'/',
 	asyncHandler(async (req, res) => {
-		const input = createBookSchema.parse(req.body);
+		const parsed = createBookSchema.parse(req.body);
 
-		// Create the book
-		const book = await prisma.book.create({
-			data: {
-				title: input.title,
-				author: input.author,
-				isbn: input.isbn ?? null,
-				category: input.category,
-				coverUrl: input.coverUrl ?? null,
-				notes: input.notes ?? null,
-				metadataId: input.metadataId ?? null,
-				metadataProvider: input.metadataProvider ?? null,
-			},
-		});
+		// No category given: guess it from the book's genres
+		let category = parsed.category;
+		if (!category && parsed.metadataId && (parsed.metadataProvider ?? 'rreading-glasses') === 'rreading-glasses') {
+			try {
+				const meta = await createRReadingGlassesProvider().getById(parsed.metadataId);
+				category = guessCategory(meta?.genres)?.category;
+			} catch {
+				// fall through to the error below
+			}
+		}
+		if (!category) {
+			res.status(400).json({ error: "Couldn't tell if this is fiction or nonfiction; pass category" });
+			return;
+		}
+		const input = { ...parsed, category };
 
-		// Get matching Readarr instances and create pending requests
+		// Same book already tracked? Reuse it and just add any missing instances.
+		const existing =
+			(input.metadataId
+				? await prisma.book.findFirst({ where: { metadataId: input.metadataId }, include: { requests: true } })
+				: null) ??
+			(await prisma.book.findFirst({
+				where: { title: input.title, author: input.author },
+				include: { requests: true },
+			}));
+
+		const book =
+			existing ??
+			(await prisma.book.create({
+				data: {
+					title: input.title,
+					author: input.author,
+					isbn: input.isbn ?? null,
+					category: input.category,
+					coverUrl: input.coverUrl ?? null,
+					notes: input.notes ?? null,
+					metadataId: input.metadataId ?? null,
+					metadataProvider: input.metadataProvider ?? null,
+				},
+			}));
+
+		// Create pending requests for the chosen instances (default: audio + ebook for the category)
+		const created: Array<{ id: string; instanceId: string }> = [];
 		try {
-			const instances = getInstancesFor(input.category);
-			if (instances.length > 0) {
-				await prisma.bookRequest.createMany({
-					data: instances.map((instance) => ({
-						bookId: book.id,
-						instanceId: instance.id,
-						status: 'pending',
-					})),
+			const instanceIds = input.instanceIds ?? getInstancesFor(input.category).map((i) => i.id);
+			const have = new Set((existing?.requests ?? []).map((r) => r.instanceId));
+			for (const instanceId of instanceIds) {
+				const instance = getInstanceById(instanceId);
+				if (!instance || !instance.enabled || have.has(instanceId)) continue;
+				const request = await prisma.bookRequest.create({
+					data: { bookId: book.id, instanceId, status: 'pending', phase: 'add' },
 				});
+				created.push(request);
 			}
 		} catch {
-			// Config not available - skip creating requests
-			// This can happen in test environments
+			// Config not available (test environments): book is still created
 		}
 
-		// Fetch the book with requests
-		const bookWithRequests = await prisma.book.findUnique({
-			where: { id: book.id },
-			include: { requests: true },
-		});
+		if (input.autoRequest !== false) {
+			for (const request of created) enqueueAdd(request.id, request.instanceId);
+		}
 
-		res.status(201).json(formatBook(bookWithRequests!));
+		const bookWithRequests = await loadBook(book.id);
+		res.status(existing ? 200 : 201).json({ ...formatBook(bookWithRequests!), existing: !!existing });
 	}),
 );
 
@@ -166,10 +188,7 @@ router.get(
 	asyncHandler(async (req, res) => {
 		const { id } = req.params;
 
-		const book = await prisma.book.findUnique({
-			where: { id },
-			include: { requests: true },
-		});
+		const book = await loadBook(id);
 
 		if (!book) {
 			res.status(404).json({ error: 'Book not found' });
@@ -211,7 +230,7 @@ router.patch(
 		const book = await prisma.book.update({
 			where: { id },
 			data: updateData,
-			include: { requests: true },
+			include: withRequests,
 		});
 
 		res.json(formatBook(book));
@@ -243,112 +262,70 @@ router.delete(
 
 /**
  * POST /api/books/:id/request
- * Process pending Readarr requests for a book
+ * Send this book's pending requests to Readarr (runs in the background)
  */
 router.post(
 	'/:id/request',
 	asyncHandler(async (req, res) => {
 		const { id } = req.params;
-
-		// Check if book exists
-		const book = await prisma.book.findUnique({
-			where: { id },
-			include: { requests: true },
-		});
-
+		const book = await loadBook(id);
 		if (!book) {
 			res.status(404).json({ error: 'Book not found' });
 			return;
 		}
-
-		const processor = new RequestProcessor();
-		const results = await processor.processBookRequests(id);
-
-		// Convert Map to plain object for JSON response
-		const resultsObj: Record<string, unknown> = {};
-		results.forEach((value, key) => {
-			resultsObj[key] = value;
-		});
-
-		// Fetch updated book with requests
-		const updatedBook = await prisma.book.findUnique({
-			where: { id },
-			include: { requests: true },
-		});
-
-		res.json({
-			book: formatBook(updatedBook!),
-			results: resultsObj,
-		});
+		for (const r of book.requests.filter((r) => r.status === 'pending')) enqueueAdd(r.id, r.instanceId);
+		res.status(202).json({ book: formatBook((await loadBook(id))!) });
 	}),
 );
 
 /**
  * POST /api/books/:id/sync
- * Sync status with Readarr for a book's requests
+ * Re-check this book's instances against Readarr now
  */
 router.post(
 	'/:id/sync',
 	asyncHandler(async (req, res) => {
 		const { id } = req.params;
-
-		// Check if book exists
-		const book = await prisma.book.findUnique({ where: { id } });
-
+		const book = await loadBook(id);
 		if (!book) {
 			res.status(404).json({ error: 'Book not found' });
 			return;
 		}
-
-		const syncService = new StatusSyncService();
-		const results = await syncService.syncBookRequests(id);
-
-		// Fetch updated book with requests
-		const updatedBook = await prisma.book.findUnique({
-			where: { id },
-			include: { requests: true },
-		});
-
-		res.json({
-			book: formatBook(updatedBook!),
-			results,
-		});
+		const tracker = getTracker();
+		const results = await Promise.all(
+			[...new Set(book.requests.map((r) => r.instanceId))]
+				.map((instanceId) => getInstanceById(instanceId))
+				.filter((i): i is NonNullable<typeof i> => !!i && i.enabled)
+				.map((instance) => tracker.pollInstance(instance)),
+		);
+		res.json({ book: formatBook((await loadBook(id))!), results });
 	}),
 );
 
 /**
  * POST /api/books/:id/instances/:instanceId
- * Add a book to a specific Readarr instance and begin search
+ * Request this book from one more Readarr instance (runs in the background)
  */
 router.post(
 	'/:id/instances/:instanceId',
 	asyncHandler(async (req, res) => {
 		const { id, instanceId } = req.params;
-
-		// Check if book exists
-		const book = await prisma.book.findUnique({
-			where: { id },
-			include: { requests: true },
-		});
-
+		const book = await loadBook(id);
 		if (!book) {
 			res.status(404).json({ error: 'Book not found' });
 			return;
 		}
 
-		// Check if instance exists and is enabled
 		const instance = getInstanceById(instanceId);
 		if (!instance) {
 			res.status(404).json({ error: 'Instance not found' });
 			return;
 		}
-
 		if (!instance.enabled) {
 			res.status(400).json({ error: 'Instance is not enabled' });
 			return;
 		}
 
-		// Check if request already exists for this instance
 		const existingRequest = book.requests.find((r) => r.instanceId === instanceId);
 		if (existingRequest) {
 			res.status(400).json({
@@ -359,84 +336,52 @@ router.post(
 			return;
 		}
 
-		// Create the request with pending status
 		const request = await prisma.bookRequest.create({
-			data: {
-				bookId: id,
-				instanceId,
-				status: 'pending',
-			},
+			data: { bookId: id, instanceId, status: 'pending', phase: 'add' },
 		});
+		enqueueAdd(request.id, instanceId);
 
-		// Process the request immediately
-		const processor = new RequestProcessor();
-		const result = await processor.processRequest(request.id);
-
-		// Fetch updated book with requests
-		const updatedBook = await prisma.book.findUnique({
-			where: { id },
-			include: { requests: true },
-		});
-
-		res.status(201).json({
-			book: formatBook(updatedBook!),
-			result,
-		});
+		res.status(202).json({ book: formatBook((await loadBook(id))!), requestId: request.id });
 	}),
 );
 
 /**
  * POST /api/books/requests/:requestId/retry
- * Retry a failed or not_found request
+ * Retry the phase this request is stuck in: add, search, download (blocklist + re-search) or import (force import)
  */
 router.post(
 	'/requests/:requestId/retry',
 	asyncHandler(async (req, res) => {
 		const { requestId } = req.params;
-
-		// Get the request
-		const request = await prisma.bookRequest.findUnique({
-			where: { id: requestId },
-			include: { book: true },
-		});
-
-		if (!request) {
-			res.status(404).json({ error: 'Request not found' });
-			return;
+		try {
+			const result = await retryRequest(requestId);
+			const request = await prisma.bookRequest.findUnique({ where: { id: requestId } });
+			res.json({ book: formatBook((await loadBook(request!.bookId))!), ...result });
+		} catch (error) {
+			if (error instanceof RetryError) {
+				const request = await prisma.bookRequest.findUnique({ where: { id: requestId } });
+				const book = request ? await loadBook(request.bookId) : null;
+				res.status(error.httpStatus).json({ error: error.message, book: book ? formatBook(book) : undefined });
+				return;
+			}
+			throw error;
 		}
+	}),
+);
 
-		// Only allow retry for error or not_found status
-		if (!['error', 'not_found'].includes(request.status)) {
-			res.status(400).json({
-				error: 'Can only retry requests with error or not_found status',
-				currentStatus: request.status,
-			});
-			return;
-		}
-
-		// Reset status to pending
-		await prisma.bookRequest.update({
-			where: { id: requestId },
-			data: {
-				status: 'pending',
-				errorMessage: null,
-			},
+/**
+ * GET /api/books/requests/:requestId/events
+ * What happened to this request, newest first
+ */
+router.get(
+	'/requests/:requestId/events',
+	asyncHandler(async (req, res) => {
+		const events = await prisma.requestEvent.findMany({
+			where: { requestId: req.params.requestId },
+			orderBy: { createdAt: 'desc' },
+			take: 25,
 		});
-
-		// Process the request
-		const processor = new RequestProcessor();
-		const result = await processor.processRequest(requestId);
-
-		// Fetch updated book with requests
-		const updatedBook = await prisma.book.findUnique({
-			where: { id: request.bookId },
-			include: { requests: true },
-		});
-
-		res.json({
-			book: formatBook(updatedBook!),
-			result,
-		});
+		res.json({ events: events.map((e) => serialize(e)) });
 	}),
 );
 

@@ -8,6 +8,7 @@ export default defineConfig({
 		include: ['server/**/*.test.ts'],
 		root: path.join(__dirname, '..'),
 		setupFiles: [path.join(__dirname, 'test-setup.ts')],
+		globalSetup: [path.join(__dirname, 'test-global-setup.ts')],
 		pool: 'forks',
 		poolOptions: {
 			forks: {

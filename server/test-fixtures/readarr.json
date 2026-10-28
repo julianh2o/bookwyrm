@@ -1,0 +1,8 @@
+{
+	"instances": [
+		{ "id": "fiction-audio", "name": "Fiction Audiobooks", "url": "http://127.0.0.1:9", "apiKey": "test", "type": "audio", "category": "fiction", "enabled": true },
+		{ "id": "fiction-ebook", "name": "Fiction Books", "url": "http://127.0.0.1:9", "apiKey": "test", "type": "ebook", "category": "fiction", "enabled": true },
+		{ "id": "nonfiction-audio", "name": "Nonfiction Audiobooks", "url": "http://127.0.0.1:9", "apiKey": "test", "type": "audio", "category": "nonfiction", "enabled": true },
+		{ "id": "nonfiction-ebook", "name": "Nonfiction Books", "url": "http://127.0.0.1:9", "apiKey": "test", "type": "ebook", "category": "nonfiction", "enabled": true }
+	]
+}
