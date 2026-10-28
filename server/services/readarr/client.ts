@@ -140,6 +140,14 @@ export class ReadarrClient {
 	}
 
 	/**
+	 * Set monitored on books by id. Unlike PUT /book/{id}, this doesn't need the book's editions
+	 * (books from GET /book have none, and PUTting them back makes Readarr throw a 500).
+	 */
+	async monitorBooks(bookIds: number[], monitored = true): Promise<void> {
+		await this.put<unknown>('/api/v1/book/monitor', { bookIds, monitored });
+	}
+
+	/**
 	 * Trigger a book search command
 	 */
 	async searchBook(bookIds: number[]): Promise<ReadarrCommandResponse> {
@@ -508,8 +516,8 @@ export class ReadarrClient {
 		if (!book.monitored) {
 			// Book exists in library but isn't monitored
 			console.log(`[Readarr] Monitoring book: "${book.title}" (id: ${book.id})`);
+			await this.monitorBooks([book.id!]);
 			book.monitored = true;
-			book = await this.updateBook(book);
 		}
 
 		// Trigger search
@@ -672,7 +680,13 @@ export class ReadarrClient {
 				const text = await response.text();
 				console.error(`[Readarr] API error: ${options.method} ${url} - ${response.status} ${response.statusText}`);
 				console.error(`[Readarr] Response body:`, text);
-				throw new Error(`Readarr API error: ${response.status} ${response.statusText} - ${text}`);
+				let detail = text;
+				try {
+					detail = (JSON.parse(text) as { message?: string }).message ?? text;
+				} catch {
+					// not JSON; keep the raw text
+				}
+				throw new Error(`Readarr API error: ${response.status} ${response.statusText} - ${detail.slice(0, 300)}`);
 			}
 
 			return response;

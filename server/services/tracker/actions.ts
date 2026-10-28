@@ -132,8 +132,7 @@ async function search(
 ): Promise<void> {
 	const book = await client.getBook(readarrBookId);
 	if (!book.monitored) {
-		book.monitored = true;
-		await client.updateBook(book);
+		await client.monitorBooks([readarrBookId]);
 	}
 	await client.searchBook([readarrBookId]);
 	await applyState(

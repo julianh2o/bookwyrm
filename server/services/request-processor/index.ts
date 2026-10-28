@@ -111,8 +111,7 @@ export class RequestProcessor {
 				library.find((b) => normalizeTitle(b.title) === normalizeTitle(request.book.title) && b.monitored);
 			if (inLibrary?.id) {
 				if (!inLibrary.monitored) {
-					inLibrary.monitored = true;
-					await client.updateBook(inLibrary);
+					await client.monitorBooks([inLibrary.id]);
 				}
 				await client.searchBook([inLibrary.id]);
 				return this.succeed(requestId, inLibrary.id, inLibrary.titleSlug, 'Already in Readarr; search triggered');

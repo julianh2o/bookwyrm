@@ -97,6 +97,7 @@ describe('RequestProcessor', () => {
 		client = {
 			getBooks: vi.fn().mockResolvedValue([]),
 			updateBook: vi.fn(),
+			monitorBooks: vi.fn(),
 			searchBook: vi.fn().mockResolvedValue({ id: 1 }),
 			searchBooks: vi.fn().mockResolvedValue([]),
 			searchAuthors: vi.fn().mockResolvedValue([]),
@@ -133,7 +134,8 @@ describe('RequestProcessor', () => {
 		const result = await processor.processRequest('request-1');
 
 		expect(result).toMatchObject({ success: true, status: 'searching', externalId: '42' });
-		expect(client.updateBook).toHaveBeenCalledWith(expect.objectContaining({ id: 42, monitored: true }));
+		expect(client.monitorBooks).toHaveBeenCalledWith([42]);
+		expect(client.updateBook).not.toHaveBeenCalled();
 		expect(client.searchBook).toHaveBeenCalledWith([42]);
 		expect(client.addAndSearchBook).not.toHaveBeenCalled();
 		expect(lastUpdate()).toMatchObject({ status: 'searching', phase: 'search', externalId: '42' });
