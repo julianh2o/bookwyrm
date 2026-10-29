@@ -24,6 +24,13 @@ the last error and recent history (`RequestEvent`), click to retry just that pha
     rejections); if nothing is importable, drop the queue row (keeping files) and search again
 - Set `DISABLE_POLLER=true` to turn the checker off.
 
+### Mousehole banner (`server/services/mousehole/`, `src/components/MouseholeBanner/`)
+Mousehole keeps the MyAnonaMouse cookie and seedbox IP fresh. When its cookie is missing or rejected, MAM torrents
+sit "stalled with no connections", so BookWyrm reads `GET {MOUSEHOLE_URL}/state` (cached 1 min, never passes
+the cookie on) and shows a red banner above the page when: no cookie, MAM unreachable, MAM rejected the IP
+update, or Mousehole itself is unreachable. Unset `MOUSEHOLE_URL` turns it off.
+- `GET /api/mousehole/status[?refresh=1]`: `{configured, ok, problem, message, url, lastContactAt, checkedAt}`
+
 ### Request statuses
 `pending` (queued) · `adding` · `searching` (just searched) · `wanted` (monitored, nothing grabbed yet) ·
 `downloading` · `importing` · `available` · `error` (with `phase` saying where it failed).

@@ -3,6 +3,7 @@ import booksRouter from './books';
 import settingsRouter from './settings';
 import metadataRouter from './metadata';
 import syncRouter from './sync';
+import mouseholeRouter from './mousehole';
 
 const router = Router();
 
@@ -10,5 +11,6 @@ router.use('/books', booksRouter);
 router.use('/settings', settingsRouter);
 router.use('/metadata', metadataRouter);
 router.use('/sync', syncRouter);
+router.use('/mousehole', mouseholeRouter);
 
 export default router;

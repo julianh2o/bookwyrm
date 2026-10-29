@@ -35,3 +35,5 @@ export {
 	type LibrarySyncResult,
 	type PurgeResponse,
 } from './sync';
+
+export { getMouseholeStatus, type MouseholeStatus } from './mousehole';
